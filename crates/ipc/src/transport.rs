@@ -162,7 +162,13 @@ impl IpcServer {
             .create_tokio()
             .map_err(|error| map_listener_error(&error))?;
         #[cfg(unix)]
-        let socket_identity = endpoint.socket_identity()?;
+        let (listener, socket_identity) = {
+            endpoint.secure_socket_permissions()?;
+            let socket_identity = endpoint.socket_identity()?;
+            let mut listener = listener;
+            listener.do_not_reclaim_name_on_drop();
+            (listener, socket_identity)
+        };
         Ok(Self {
             endpoint,
             policy,
@@ -405,8 +411,7 @@ async fn connect(
 
 #[cfg(unix)]
 fn listener_options(options: ListenerOptions<'static>) -> ListenerOptions<'static> {
-    use interprocess::os::unix::local_socket::ListenerOptionsExt;
-    options.mode(0o600).reclaim_name(false).try_overwrite(false)
+    options.reclaim_name(true).try_overwrite(false)
 }
 
 #[cfg(windows)]

@@ -168,6 +168,14 @@ impl IpcEndpoint {
     }
 
     #[cfg(unix)]
+    pub(crate) fn secure_socket_permissions(&self) -> Result<(), IpcError> {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::set_permissions(self.socket_path(), std::fs::Permissions::from_mode(0o600))
+            .map_err(|_| IpcError::InsecureEndpoint)
+    }
+
+    #[cfg(unix)]
     pub(crate) fn remove_owned_socket(&self, expected: UnixSocketIdentity) {
         if self.existing_socket_identity() != Ok(Some(expected)) {
             return;
