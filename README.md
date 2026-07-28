@@ -10,8 +10,9 @@ notifications, including events produced by Codex running on a remote server.
 > decisions, the Rust workspace, three-platform quality gates, and the
 > canonical event domain model, layered configuration, and cross-platform path
 > rules are established, together with structured redacted logging and the
-> transactional SQLite outbox/deduplication store. Transport and platform
-> adapter behavior has not been implemented yet.
+> transactional SQLite outbox/deduplication store. The Stage 08 local IPC
+> implementation is awaiting three-platform verification; SSH and native
+> notification adapters have not been implemented yet.
 
 The implementation sequence and acceptance gates are defined in
 [`stages.md`](stages.md).
@@ -221,6 +222,28 @@ Protocol version 1 is frozen by
 unknown event kinds and unknown object fields, limits an encoded event to
 16,384 bytes, and permits forward metadata only through bounded namespaced
 extensions.
+
+## Local IPC Contract
+
+Local producers and the per-user agent exchange exactly one canonical event
+and one acknowledgement per connection. Each frame uses a four-byte big-endian
+length prefix. Requests are limited to 16,384 bytes and acknowledgements to
+2,048 bytes. Acknowledgements carry the matching event ID and one of
+`accepted`, `duplicate`, `delivered`, or `rejected`; rejection details use a
+bounded identifier, retry flag, and single-line safe message.
+
+The client and server apply bounded connection and I/O deadlines. The server
+also caps active connection tasks; defaults are two seconds and 32 tasks, with
+hard configuration limits of 10 milliseconds to 30 seconds and 1 to 256 tasks.
+Windows uses a named pipe with an owner-only DACL and verifies the peer process
+belongs to the current user. macOS and Linux use an absolute Unix socket path
+inside a current-user-owned `0700` directory, create the socket with mode
+`0600`, and compare peer credentials with the effective user ID.
+
+An active endpoint cannot be displaced. An owned stale Unix socket can be
+recovered, while symlinks, unrelated files, wrong owners, and unsafe directory
+permissions are rejected. Local IPC uses no HTTP client and does not consult
+`HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY`.
 
 ## Delivery Semantics
 
