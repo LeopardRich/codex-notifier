@@ -82,7 +82,7 @@ impl StorePolicy {
     /// # Errors
     ///
     /// Returns [`PersistenceError::InvalidValue`] for zero or excessive values.
-    pub const fn with_receipt_retention(
+    pub fn with_receipt_retention(
         mut self,
         entries: usize,
         age_ms: u64,
@@ -98,7 +98,7 @@ impl StorePolicy {
     /// # Errors
     ///
     /// Returns [`PersistenceError::InvalidValue`] for zero or excessive values.
-    pub const fn with_dead_letter_retention(
+    pub fn with_dead_letter_retention(
         mut self,
         entries: usize,
         age_ms: u64,
@@ -193,7 +193,7 @@ pub enum RetryOutcome {
 }
 
 /// One leased canonical event and its compare-and-set token.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LeasedEvent {
     pub(crate) event: CanonicalEvent,
     pub(crate) lease_token: String,

@@ -21,7 +21,7 @@ pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 const MAX_SAFE_CODE_BYTES: usize = 64;
 const MAX_LEASE_TOKEN_BYTES: usize = 64;
 
-const CREATE_SCHEMA_V1: &str = r#"
+const CREATE_SCHEMA_V1: &str = r"
 CREATE TABLE IF NOT EXISTS outbox (
     event_id TEXT PRIMARY KEY NOT NULL,
     event_json BLOB NOT NULL CHECK(length(event_json) <= 16384),
@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS dead_letters (
 );
 CREATE INDEX IF NOT EXISTS dead_letters_time_idx
     ON dead_letters(failed_at_ms, event_id);
-"#;
+";
 
 /// Single-connection transactional SQLite outbox and deduplication store.
 pub struct SqliteStore {
