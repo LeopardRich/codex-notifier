@@ -1,6 +1,6 @@
 # Stage 04 Verification
 
-- Status: Pending CI
+- Status: Complete
 - Date: 2026-07-29
 - Host: Windows 10 Pro 22H2 (19045.6466)
 
@@ -26,6 +26,10 @@
 - `cargo test --workspace` exits 0.
 - `cargo tree -p codex-notifier-core --edges normal` contains only general
   serialization, UUID, time, Unicode normalization, and error libraries.
+- GitHub Actions run
+  [`30388589617`](https://github.com/LeopardRich/codex-notifier/actions/runs/30388589617)
+  completed successfully for `windows-desktop`, `macos-desktop`, and
+  `linux-relay` from commit `4338c42`.
 
-Stage 04 remains incomplete until the committed implementation passes the
-Windows, macOS, and Linux relay CI jobs.
+Stage 04 is complete. Platform adapters and source-specific payload mapping
+remain assigned to their later stages.
