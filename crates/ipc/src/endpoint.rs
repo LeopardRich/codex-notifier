@@ -151,10 +151,9 @@ impl IpcEndpoint {
             .name(self.name()?)
             .wait_mode(ConnectWaitMode::Timeout(Duration::from_millis(100)));
         match options.connect_sync() {
-            Ok(_) => return Err(IpcError::AlreadyRunning),
             Err(error) if error.kind() == ErrorKind::ConnectionRefused => {}
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
-            Err(_) => return Err(IpcError::AlreadyRunning),
+            Ok(_) | Err(_) => return Err(IpcError::AlreadyRunning),
         }
         if self.existing_socket_identity()? != Some(original) {
             return Err(IpcError::InsecureEndpoint);

@@ -481,6 +481,9 @@ fn validate_windows_peer_pid(peer_pid: u32) -> Result<(), IpcError> {
 
     let current_pid = get_current_pid().map_err(|_| IpcError::UnauthorizedPeer)?;
     let peer_pid = Pid::from_u32(peer_pid);
+    if peer_pid == current_pid {
+        return Ok(());
+    }
     let process_ids = [current_pid, peer_pid];
     let mut system = System::new();
     system.refresh_processes_specifics(
