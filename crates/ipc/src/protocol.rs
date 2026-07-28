@@ -95,6 +95,39 @@ pub struct Acknowledgement {
 }
 
 impl Acknowledgement {
+    /// Creates an acknowledgement for a newly accepted event.
+    #[must_use]
+    pub const fn accepted(event_id: EventId) -> Self {
+        Self {
+            schema_version: 1,
+            event_id,
+            status: AckStatus::Accepted,
+            error: None,
+        }
+    }
+
+    /// Creates an acknowledgement for an already durable event.
+    #[must_use]
+    pub const fn duplicate(event_id: EventId) -> Self {
+        Self {
+            schema_version: 1,
+            event_id,
+            status: AckStatus::Duplicate,
+            error: None,
+        }
+    }
+
+    /// Creates an acknowledgement for completed desktop delivery.
+    #[must_use]
+    pub const fn delivered(event_id: EventId) -> Self {
+        Self {
+            schema_version: 1,
+            event_id,
+            status: AckStatus::Delivered,
+            error: None,
+        }
+    }
+
     /// Creates a non-rejected acknowledgement.
     ///
     /// # Errors

@@ -216,6 +216,34 @@ fn retries_schedule_then_dead_letter_at_the_attempt_limit() {
 }
 
 #[test]
+fn cancelled_lease_release_does_not_consume_delivery_attempts() {
+    let policy = StorePolicy::default().with_max_attempts(1).expect("policy");
+    let mut store = SqliteStore::open_in_memory(policy).expect("memory store");
+    let fixture = event(ID_1, EventKind::TaskCompleted, NOW_MS - 1_000);
+    store.enqueue(&fixture, NOW_MS).expect("enqueue");
+
+    let first = store
+        .lease_next(NOW_MS, "lease-01")
+        .expect("first lease")
+        .expect("event");
+    assert_eq!(first.attempt(), 1);
+    store
+        .release_lease(fixture.event_id(), "lease-01", NOW_MS + 1, "agent_shutdown")
+        .expect("release cancelled lease");
+
+    let second = store
+        .lease_next(NOW_MS + 1, "lease-02")
+        .expect("second lease")
+        .expect("event");
+    assert_eq!(second.attempt(), 1);
+    store
+        .acknowledge(fixture.event_id(), "lease-02", NOW_MS + 2)
+        .expect("acknowledge");
+    assert_eq!(store.queue_len().expect("queue length"), 0);
+    assert_eq!(store.dead_letter_count().expect("dead letters"), 0);
+}
+
+#[test]
 fn explicit_dead_letters_store_only_safe_metadata() {
     let mut store = SqliteStore::open_in_memory(StorePolicy::default()).expect("memory store");
     let fixture = event(ID_1, EventKind::TaskCompleted, NOW_MS - 1_000);

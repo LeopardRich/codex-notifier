@@ -1,9 +1,15 @@
 //! Application use cases and adapter ports.
 
+mod agent;
 mod log_error;
 mod log_model;
 mod log_sink;
 
+pub use agent::{
+    AgentError, AgentLease, AgentPolicy, AgentQueue, AgentQueueError, AgentRunReport, AgentRuntime,
+    AgentState, CancellationToken, DeliveryFailure, DeliveryFuture, DeliveryOutcome, EnqueueResult,
+    EventDelivery, RoleDeliveryFactory, RuntimeRole, SubmissionOutcome,
+};
 pub use log_error::{LogError, LogErrorCode};
 pub use log_model::{
     CorrelationId, EventLogRecord, EventOutcome, EventStatus, LogSeverity, LogTiming,

@@ -39,6 +39,17 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 [[package]]
 name = "codex-notifier"
 version = "0.1.0"
+dependencies = [
+ "codex-notifier-application",
+ "codex-notifier-config",
+ "codex-notifier-core",
+ "codex-notifier-ipc",
+ "codex-notifier-persistence",
+ "tempfile",
+ "thiserror",
+ "time",
+ "tokio",
+]
 
 [[package]]
 name = "codex-notifier-application"
@@ -49,6 +60,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "time",
+ "tokio",
 ]
 
 [[package]]

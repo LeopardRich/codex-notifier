@@ -312,6 +312,44 @@ impl SqliteStore {
         Ok(outcome)
     }
 
+    /// Returns a cancelled lease to immediate availability without consuming
+    /// a delivery attempt.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation, not-found, lease-conflict, or database error.
+    pub fn release_lease(
+        &mut self,
+        event_id: EventId,
+        lease_token: &str,
+        now_ms: i64,
+        error_code: &str,
+    ) -> Result<(), PersistenceError> {
+        validate_identifier(lease_token, MAX_LEASE_TOKEN_BYTES)?;
+        validate_safe_code(error_code)?;
+        let event_id = event_id.to_string();
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(map_sqlite_error)?;
+        let (_, attempts) = require_lease(&transaction, &event_id, lease_token)?;
+        if attempts <= 0 {
+            return Err(PersistenceError::CorruptData);
+        }
+        transaction
+            .execute(
+                "UPDATE outbox
+                 SET state = 'queued', lease_token = NULL, lease_until_ms = NULL,
+                     available_at_ms = ?2, attempts = attempts - 1,
+                     last_error_code = ?3
+                 WHERE event_id = ?1",
+                params![event_id, now_ms, error_code],
+            )
+            .map_err(map_sqlite_error)?;
+        maintain(&transaction, now_ms, self.policy)?;
+        transaction.commit().map_err(map_sqlite_error)
+    }
+
     /// Moves a leased event to metadata-only dead letters transactionally.
     ///
     /// # Errors

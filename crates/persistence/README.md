@@ -1,8 +1,9 @@
 # persistence
 
 Implements the transactional SQLite outbox, expiring leases, acknowledgements,
-retry scheduling, delivery receipts, deduplication, bounded metadata-only dead
-letters, retention, integrity checks, and forward schema migration.
+cancellation release, retry scheduling, delivery receipts, deduplication,
+bounded metadata-only dead letters, retention, integrity checks, and forward
+schema migration.
 
 Only validated canonical event JSON is stored in the outbox. Receipt and dead
 letter rows never contain display text or event payloads. Every state change

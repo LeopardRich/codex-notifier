@@ -11,7 +11,9 @@ notifications, including events produced by Codex running on a remote server.
 > canonical event domain model, layered configuration, and cross-platform path
 > rules are established, together with structured redacted logging and the
 > transactional SQLite outbox/deduplication store and bounded per-user local
-> IPC. SSH and native notification adapters have not been implemented yet.
+> IPC. The Stage 09 agent lifecycle implementation is awaiting three-platform
+> verification. SSH and native notification adapters have not been implemented
+> yet.
 
 The implementation sequence and acceptance gates are defined in
 [`stages.md`](stages.md).
@@ -243,6 +245,30 @@ An active endpoint cannot be displaced. An owned stale Unix socket can be
 recovered, while symlinks, unrelated files, wrong owners, and unsafe directory
 permissions are rejected. Local IPC uses no HTTP client and does not consult
 `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY`.
+
+## Agent Lifecycle Contract
+
+The agent role is taken only from validated configuration. Composition binds
+the per-profile IPC endpoint first, then opens the bounded SQLite queue and
+initializes exactly one role adapter graph: `desktop` initializes the native
+notification port but not SSH, while `relay` initializes the SSH delivery port
+but not native notification APIs. Concrete SSH and notification adapters remain
+assigned to later stages.
+
+Lifecycle state moves monotonically through `starting`, `ready`, `draining`,
+and `stopped`. A local submission is acknowledged only after transactional
+enqueue, and duplicate event IDs receive a distinct acknowledgement. The
+durable queue is the backpressure boundary, so accepted work does not create an
+unbounded in-memory task or channel. The default worker set is four tasks with
+a hard maximum of 64.
+
+Shutdown changes state to `draining` before stopping IPC acceptance. New
+submissions are rejected with a safe retryable acknowledgement, cooperative
+delivery is cancelled, and each lease is acknowledged, retried, dead-lettered,
+or returned by a drop guard. Workers that exceed the configured 10 ms to 30
+second graceful deadline are aborted only after their lease guard has made the
+event durable again. A shutdown release reverses the lease attempt so repeated
+agent restarts cannot exhaust delivery retries.
 
 ## Delivery Semantics
 
