@@ -1,6 +1,6 @@
 # Stage 09 Verification
 
-- Status: Pending CI
+- Status: Complete
 - Date: 2026-07-29
 - Host: Windows 10 Pro 22H2 (19045.6466)
 
@@ -19,7 +19,7 @@
 - Host coordination that enters draining before stopping IPC acceptance and
   reports IPC, delivery, retry, dead-letter, and forced-cancellation counts.
 
-## Pending Verification
+## Verified
 
 - Five application agent contract tests cover role initialization isolation,
   readiness and delivery, exact queue-capacity backpressure, fixed worker peak,
@@ -30,8 +30,13 @@
   the delivery-attempt budget or dead-letter an otherwise undelivered event.
 - `cargo fmt --all -- --check`, application Clippy with `-D warnings`, and all
   12 application tests pass locally.
-- Full workspace formatting, Clippy, and tests must pass on the GitHub Actions
-  Windows, macOS, and Linux jobs before this stage is complete.
+- `cargo test --workspace` passes all Stage 04-09 tests in CI: 63 tests on
+  Windows and 65 tests on macOS/Linux, including the platform-specific IPC
+  contracts.
+- GitHub Actions run
+  [`30400736906`](https://github.com/LeopardRich/codex-notifier/actions/runs/30400736906)
+  completed successfully for `windows-desktop`, `macos-desktop`, and
+  `linux-relay` from commit `3992b0c`.
 
 ## Local Environment Note
 
@@ -39,4 +44,5 @@
   because no usable C compiler is available. No machine toolchain, Codex login,
   or global hook was modified as a workaround.
 
-Stage 09 remains incomplete until the three-platform CI evidence is recorded.
+Stage 09 is complete. Codex task-completion ingestion remains assigned to
+Stage 10.
