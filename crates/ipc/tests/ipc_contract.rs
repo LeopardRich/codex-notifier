@@ -163,6 +163,19 @@ async fn active_endpoint_cannot_be_displaced() {
     ));
 }
 
+#[tokio::test]
+async fn absent_endpoint_connection_is_bounded() {
+    let (_directory, endpoint) = endpoint();
+    let policy =
+        IpcPolicy::new(StdDuration::from_millis(50), StdDuration::from_secs(1), 1).expect("policy");
+    let started = std::time::Instant::now();
+    assert!(matches!(
+        IpcClient::new(endpoint, policy).submit(&event()).await,
+        Err(IpcError::ConnectionFailed | IpcError::Timeout)
+    ));
+    assert!(started.elapsed() < StdDuration::from_secs(5));
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn stale_owned_socket_recovers_but_unrelated_file_is_preserved() {

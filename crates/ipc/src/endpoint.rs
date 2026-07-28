@@ -60,7 +60,7 @@ impl IpcEndpoint {
     pub fn display_name(&self) -> String {
         #[cfg(unix)]
         {
-            return self.socket_path().to_string_lossy().into_owned();
+            self.socket_path().to_string_lossy().into_owned()
         }
         #[cfg(windows)]
         {
@@ -71,10 +71,9 @@ impl IpcEndpoint {
     pub(crate) fn name(&self) -> Result<Name<'static>, IpcError> {
         #[cfg(unix)]
         {
-            return self
-                .socket_path()
+            self.socket_path()
                 .to_fs_name::<GenericFilePath>()
-                .map_err(|_| IpcError::InvalidEndpoint);
+                .map_err(|_| IpcError::InvalidEndpoint)
         }
         #[cfg(windows)]
         {
@@ -88,6 +87,11 @@ impl IpcEndpoint {
     pub(crate) fn socket_path(&self) -> PathBuf {
         self.runtime_dir
             .join(format!("codex-notifier-{}.sock", self.profile))
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn pipe_path(&self) -> String {
+        format!(r"\\.\pipe\codex-notifier-{}", self.profile)
     }
 
     #[cfg(unix)]

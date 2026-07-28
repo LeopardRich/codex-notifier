@@ -21,8 +21,9 @@
 
 - IPC unit and contract tests cover valid structured submission, status/error
   validation, identity mismatch rejection, oversized/truncated/slow frames,
-  active endpoint protection, Unix stale recovery, concurrency bounds, and a
-  real child submission with invalid proxy environment variables.
+  absent-endpoint deadlines, active endpoint protection, Unix stale recovery,
+  concurrency bounds, and a real child submission with invalid proxy
+  environment variables.
 - `cargo fmt --all -- --check` exits 0 locally.
 - `cargo clippy -p codex-notifier-ipc --all-targets -- -D warnings` exits 0
   locally.

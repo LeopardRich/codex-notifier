@@ -7,9 +7,15 @@ use std::time::Duration;
 
 use codex_notifier_core::{CanonicalEvent, limits::MAX_EVENT_BYTES};
 use interprocess::ConnectWaitMode;
+#[cfg(unix)]
+use interprocess::local_socket::ConnectOptions;
 use interprocess::local_socket::{
-    ConnectOptions, ListenerOptions,
+    ListenerOptions,
     tokio::{Listener, Stream, prelude::*},
+};
+#[cfg(windows)]
+use interprocess::os::windows::named_pipe::{
+    pipe_mode::Bytes, tokio::DuplexPipeStream as WindowsClientStream,
 };
 use time::OffsetDateTime;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -110,15 +116,8 @@ impl IpcClient {
     /// Returns a classified connection, peer identity, deadline, frame, or
     /// acknowledgement failure.
     pub async fn submit(&self, event: &CanonicalEvent) -> Result<Acknowledgement, IpcError> {
-        let name = self.endpoint.name()?;
-        let options = ConnectOptions::new()
-            .name(name)
-            .wait_mode(ConnectWaitMode::Timeout(self.policy.connect_timeout));
-        let mut stream = timeout(self.policy.connect_timeout, options.connect_tokio())
-            .await
-            .map_err(|_| IpcError::Timeout)?
-            .map_err(|_| IpcError::ConnectionFailed)?;
-        validate_peer(&stream)?;
+        let mut stream = connect(&self.endpoint, self.policy.connect_timeout).await?;
+        validate_client_peer(&stream)?;
 
         let request = event.to_json().map_err(|_| IpcError::MalformedEvent)?;
         timed_write_frame(&mut stream, &request, self.policy.io_timeout).await?;
@@ -152,7 +151,11 @@ impl IpcServer {
             endpoint.validate_existing_socket()?;
         }
         let name = endpoint.name()?;
-        let options = listener_options(ListenerOptions::new().name(name))?;
+        let options = ListenerOptions::new().name(name);
+        #[cfg(unix)]
+        let options = listener_options(options);
+        #[cfg(windows)]
+        let options = listener_options(options)?;
         let listener = options.create_tokio().map_err(|error| {
             if error.kind() == io::ErrorKind::AddrInUse {
                 IpcError::AlreadyRunning
@@ -355,11 +358,37 @@ fn map_read_error(error: &io::Error) -> IpcError {
 }
 
 #[cfg(unix)]
-fn listener_options(
-    options: ListenerOptions<'static>,
-) -> Result<ListenerOptions<'static>, IpcError> {
+async fn connect(endpoint: &IpcEndpoint, deadline: Duration) -> Result<Stream, IpcError> {
+    let options = ConnectOptions::new()
+        .name(endpoint.name()?)
+        .wait_mode(ConnectWaitMode::Timeout(deadline));
+    timeout(deadline, options.connect_tokio())
+        .await
+        .map_err(|_| IpcError::Timeout)?
+        .map_err(|_| IpcError::ConnectionFailed)
+}
+
+#[cfg(windows)]
+async fn connect(
+    endpoint: &IpcEndpoint,
+    deadline: Duration,
+) -> Result<WindowsClientStream<Bytes>, IpcError> {
+    timeout(
+        deadline,
+        WindowsClientStream::connect_by_path_with_wait_mode(
+            endpoint.pipe_path(),
+            ConnectWaitMode::Timeout(deadline),
+        ),
+    )
+    .await
+    .map_err(|_| IpcError::Timeout)?
+    .map_err(|_| IpcError::ConnectionFailed)
+}
+
+#[cfg(unix)]
+fn listener_options(options: ListenerOptions<'static>) -> ListenerOptions<'static> {
     use interprocess::os::unix::local_socket::ListenerOptionsExt;
-    Ok(options.mode(0o600).reclaim_name(true).try_overwrite(false))
+    options.mode(0o600).reclaim_name(true).try_overwrite(false)
 }
 
 #[cfg(windows)]
@@ -391,6 +420,11 @@ fn validate_peer(stream: &Stream) -> Result<(), IpcError> {
 }
 
 #[cfg(unix)]
+fn validate_client_peer(stream: &Stream) -> Result<(), IpcError> {
+    validate_peer(stream)
+}
+
+#[cfg(unix)]
 fn validate_user_ids(expected: u32, actual: u32) -> Result<(), IpcError> {
     validate_user_match(expected == actual)
 }
@@ -405,13 +439,26 @@ fn validate_user_match(matches: bool) -> Result<(), IpcError> {
 
 #[cfg(windows)]
 fn validate_peer(stream: &Stream) -> Result<(), IpcError> {
-    use sysinfo::{Pid, ProcessesToUpdate, System, get_current_pid};
-
     let peer_pid = stream
         .peer_creds()
         .map_err(|_| IpcError::UnauthorizedPeer)?
         .pid()
         .ok_or(IpcError::UnauthorizedPeer)?;
+    validate_windows_peer_pid(peer_pid)
+}
+
+#[cfg(windows)]
+fn validate_client_peer(stream: &WindowsClientStream<Bytes>) -> Result<(), IpcError> {
+    let peer_pid = stream
+        .peer_process_id()
+        .map_err(|_| IpcError::UnauthorizedPeer)?;
+    validate_windows_peer_pid(peer_pid)
+}
+
+#[cfg(windows)]
+fn validate_windows_peer_pid(peer_pid: u32) -> Result<(), IpcError> {
+    use sysinfo::{Pid, ProcessesToUpdate, System, get_current_pid};
+
     let current_pid = get_current_pid().map_err(|_| IpcError::UnauthorizedPeer)?;
     let peer_pid = Pid::from_u32(peer_pid);
     let process_ids = [current_pid, peer_pid];
