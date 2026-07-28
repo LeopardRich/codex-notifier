@@ -368,8 +368,17 @@ CI runs the same quality gates on Windows, macOS, and a Linux relay runner.
 
 ## Observability and Operations
 
-- Structured logs contain event IDs, event kinds, state transitions, durations,
-  and safe error codes; display bodies are redacted by default.
+- Structured event logs use a fixed allowlist: timestamp, severity, event ID,
+  event kind, typed state, bounded duration, validated correlation ID, and an
+  optional validated safe error code. Display text, source labels, paths,
+  commands, and raw payloads are not log fields at any level.
+- Records use compact one-object-per-line JSON. Correlation IDs and error codes
+  accept only bounded identifier grammars, so newlines, controls, terminal
+  escapes, quotes, and forged fields cannot alter the log structure. Human and
+  JSON diagnostics use the same typed status and fixed non-interpolated text.
+- The default rotation policy is 1 MiB per segment, five retained segments,
+  and seven days. Hard limits cap a segment at 64 MiB, retained segments at 64,
+  and age at 365 days; exact size and age boundaries are inclusive.
 - `status` reports queue depth, oldest queued age, and the most recent successful
   delivery time.
 - Health checks are local-only and do not open an HTTP port.

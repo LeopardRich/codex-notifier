@@ -21,6 +21,13 @@ version = "0.1.0"
 [[package]]
 name = "codex-notifier-application"
 version = "0.1.0"
+dependencies = [
+ "codex-notifier-core",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "time",
+]
 
 [[package]]
 name = "codex-notifier-codex-source"
