@@ -856,6 +856,13 @@ fn map_sqlite_error(error: SqliteError) -> PersistenceError {
                 _ => PersistenceError::DatabaseFailure,
             }
         }
+        corrupt @ (SqliteError::FromSqlConversionFailure(..)
+        | SqliteError::IntegralValueOutOfRange(..)
+        | SqliteError::Utf8Error(..)
+        | SqliteError::InvalidColumnType(..)) => {
+            drop(corrupt);
+            PersistenceError::CorruptData
+        }
         other => {
             drop(other);
             PersistenceError::DatabaseFailure
