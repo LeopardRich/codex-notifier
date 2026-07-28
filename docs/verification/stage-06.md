@@ -1,6 +1,6 @@
 # Stage 06 Verification
 
-- Status: Pending CI
+- Status: Complete
 - Date: 2026-07-29
 - Host: Windows 10 Pro 22H2 (19045.6466)
 
@@ -27,8 +27,10 @@
 - `cargo test --workspace` exits 0 with all 31 Stage 04-06 contract tests
   passing.
 
-## Verification pending
+- GitHub Actions run
+  [`30391362546`](https://github.com/LeopardRich/codex-notifier/actions/runs/30391362546)
+  completed successfully for `windows-desktop`, `macos-desktop`, and
+  `linux-relay` from commit `da63c7a`.
 
-- GitHub Actions on `windows-desktop`, `macos-desktop`, and `linux-relay`.
-
-Stage 06 remains pending until all local and three-platform CI gates pass.
+Stage 06 is complete. Durable queueing, delivery receipts, and deduplication
+remain assigned to Stage 07.
