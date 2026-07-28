@@ -11,7 +11,7 @@ use codex_notifier_persistence::{
 };
 use rusqlite::{Connection, TransactionBehavior, params};
 use tempfile::tempdir;
-use time::{Duration, OffsetDateTime};
+use time::OffsetDateTime;
 
 const NOW_MS: i64 = 1_700_000_000_000;
 const ID_1: &str = "01890f4d-e000-7000-8000-000000000001";
