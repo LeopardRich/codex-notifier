@@ -1,6 +1,6 @@
 # Stage 07 Verification
 
-- Status: Pending CI
+- Status: Complete
 - Date: 2026-07-29
 - Host: Windows 10 Pro 22H2 (19045.6466)
 
@@ -18,7 +18,7 @@
 - File-type/symlink rejection and classified locked, unwritable, corrupt,
   migration, capacity, expiry, and lease-transition failures.
 
-## Verification pending
+## Verified
 
 - Twelve persistence contract tests cover committed and uncommitted crash
   recovery, lease expiry recovery, acknowledgement tombstones, duplicate
@@ -26,13 +26,20 @@
   letters, exact capacity/age/retention bounds, lock and unwritable failures,
   version 0 migration preservation, migration rollback, newer schemas, corrupt
   payload rollback, and hostile transition inputs.
-- `cargo fmt --all -- --check` passes locally.
+- `cargo fmt --all -- --check` exits 0.
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings` exits 0.
+- `cargo test --workspace` exits 0 with all 43 Stage 04-07 contract tests
+  passing.
+- GitHub Actions run
+  [`30394129954`](https://github.com/LeopardRich/codex-notifier/actions/runs/30394129954)
+  completed successfully for `windows-desktop`, `macos-desktop`, and
+  `linux-relay` from commit `7d9c6e4`.
+
+## Local environment note
+
 - Local compile, Clippy, and test execution require a C compiler for bundled
   SQLite. The installed Rust GNU toolchain has no usable `cc1`, and no system
   clang/MSVC compiler is present; no machine toolchain was installed or
   modified as a workaround.
-- GitHub Actions must pass formatter, strict Clippy, and all workspace tests on
-  `windows-desktop`, `macos-desktop`, and `linux-relay`.
 
-Stage 07 remains pending until the bundled SQLite implementation and all tests
-pass the three-platform CI gates.
+Stage 07 is complete. Per-user local IPC remains assigned to Stage 08.
