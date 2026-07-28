@@ -6,10 +6,11 @@
 It turns Codex events that need human attention into native Windows or macOS
 notifications, including events produced by Codex running on a remote server.
 
-> Status: Stages 01-04 are complete: compatibility evidence, architecture
+> Status: Stages 01-05 are complete: compatibility evidence, architecture
 > decisions, the Rust workspace, three-platform quality gates, and the
-> canonical event domain model are established. Adapter and application
-> behavior has not been implemented yet.
+> canonical event domain model, layered configuration, and cross-platform path
+> rules are established. Adapter and application behavior has not been
+> implemented yet.
 
 The implementation sequence and acceptance gates are defined in
 [`stages.md`](stages.md).

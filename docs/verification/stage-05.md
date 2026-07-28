@@ -1,6 +1,6 @@
 # Stage 05 Verification
 
-- Status: Pending CI
+- Status: Complete
 - Date: 2026-07-29
 - Host: Windows 10 Pro 22H2 (19045.6466)
 
@@ -27,8 +27,10 @@
 - `cargo tree -p codex-notifier-config --edges normal` contains only TOML/
   Serde parsing and safe error libraries.
 
-## Verification pending
+- GitHub Actions run
+  [`30390389914`](https://github.com/LeopardRich/codex-notifier/actions/runs/30390389914)
+  completed successfully for `windows-desktop`, `macos-desktop`, and
+  `linux-relay` from commit `463e4dd`.
 
-- GitHub Actions on `windows-desktop`, `macos-desktop`, and `linux-relay`.
-
-Stage 05 remains pending until all local and three-platform CI gates pass.
+Stage 05 is complete. Structured logging and its privacy policy remain assigned
+to Stage 06.
