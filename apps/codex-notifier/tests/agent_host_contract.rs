@@ -340,8 +340,8 @@ async fn second_profile_instance_fails_before_another_adapter_initializes() {
     assert_eq!(factory.relay_calls.load(Ordering::Acquire), 0);
 }
 
-#[test]
-fn validated_relay_config_initializes_only_relay_port() {
+#[tokio::test]
+async fn validated_relay_config_initializes_only_relay_port() {
     let directory = test_directory();
     let profile = format!(
         "r{}_{}",
