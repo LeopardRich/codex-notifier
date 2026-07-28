@@ -6,9 +6,9 @@
 It turns Codex events that need human attention into native Windows or macOS
 notifications, including events produced by Codex running on a remote server.
 
-> Status: Stage 01 compatibility evidence, Stage 02 architecture decisions,
-> and the Stage 03 Rust workspace are established. Application behavior has not
-> been implemented yet.
+> Status: Stages 01-03 are complete: compatibility evidence, architecture
+> decisions, the Rust workspace, and three-platform quality gates are
+> established. Application behavior has not been implemented yet.
 
 The implementation sequence and acceptance gates are defined in
 [`stages.md`](stages.md).
