@@ -3,14 +3,24 @@
 use std::path::{Path, PathBuf};
 
 use interprocess::local_socket::Name;
-#[cfg(unix)]
-use interprocess::local_socket::{GenericFilePath, ToFsName};
 #[cfg(windows)]
 use interprocess::local_socket::{GenericNamespaced, ToNsName};
+#[cfg(unix)]
+use interprocess::{
+    ConnectWaitMode,
+    local_socket::{ConnectOptions, GenericFilePath, ToFsName},
+};
 
 use crate::IpcError;
 
 const MAX_PROFILE_BYTES: usize = 64;
+
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct UnixSocketIdentity {
+    device: u64,
+    inode: u64,
+}
 
 /// Validated per-user local IPC endpoint.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -130,35 +140,62 @@ impl IpcEndpoint {
     }
 
     #[cfg(unix)]
-    pub(crate) fn validate_existing_socket(&self) -> Result<(), IpcError> {
+    pub(crate) fn recover_stale_socket(&self) -> Result<(), IpcError> {
+        use std::io::ErrorKind;
+        use std::time::Duration;
+
+        let Some(original) = self.existing_socket_identity()? else {
+            return Ok(());
+        };
+        let options = ConnectOptions::new()
+            .name(self.name()?)
+            .wait_mode(ConnectWaitMode::Timeout(Duration::from_millis(100)));
+        match options.connect_sync() {
+            Ok(_) => return Err(IpcError::AlreadyRunning),
+            Err(error) if error.kind() == ErrorKind::ConnectionRefused => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(_) => return Err(IpcError::AlreadyRunning),
+        }
+        if self.existing_socket_identity()? != Some(original) {
+            return Err(IpcError::InsecureEndpoint);
+        }
+        std::fs::remove_file(self.socket_path()).map_err(|_| IpcError::InsecureEndpoint)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn socket_identity(&self) -> Result<UnixSocketIdentity, IpcError> {
+        self.existing_socket_identity()?
+            .ok_or(IpcError::InsecureEndpoint)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn remove_owned_socket(&self, expected: UnixSocketIdentity) {
+        if self.existing_socket_identity() != Ok(Some(expected)) {
+            return;
+        }
+        let _ = std::fs::remove_file(self.socket_path());
+    }
+
+    #[cfg(unix)]
+    fn existing_socket_identity(&self) -> Result<Option<UnixSocketIdentity>, IpcError> {
         use std::os::unix::fs::{FileTypeExt, MetadataExt};
 
         let path = self.socket_path();
         let metadata = match path.symlink_metadata() {
             Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(_) => return Err(IpcError::InsecureEndpoint),
         };
         if !metadata.file_type().is_socket()
             || metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.mode() & 0o777 != 0o600
         {
             return Err(IpcError::InsecureEndpoint);
         }
-        Ok(())
-    }
-
-    #[cfg(unix)]
-    pub(crate) fn remove_owned_socket(&self) {
-        use std::os::unix::fs::{FileTypeExt, MetadataExt};
-
-        let path = self.socket_path();
-        let Ok(metadata) = path.symlink_metadata() else {
-            return;
-        };
-        if metadata.file_type().is_socket() && metadata.uid() == rustix::process::geteuid().as_raw()
-        {
-            let _ = std::fs::remove_file(path);
-        }
+        Ok(Some(UnixSocketIdentity {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        }))
     }
 }
 

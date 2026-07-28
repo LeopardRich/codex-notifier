@@ -36,13 +36,19 @@ fn event() -> CanonicalEvent {
 }
 
 fn endpoint() -> (TempDir, IpcEndpoint) {
+    #[cfg(unix)]
+    let directory = tempfile::Builder::new()
+        .prefix("cn")
+        .tempdir_in("/tmp")
+        .expect("short temporary directory");
+    #[cfg(windows)]
     let directory = tempfile::tempdir().expect("temporary directory");
     let profile = format!(
-        "test_{}_{}",
+        "t{}_{}",
         std::process::id(),
         NEXT_PROFILE.fetch_add(1, Ordering::Relaxed)
     );
-    let endpoint = IpcEndpoint::new(directory.path().join("ipc"), profile).expect("endpoint");
+    let endpoint = IpcEndpoint::new(directory.path(), profile).expect("endpoint");
     (directory, endpoint)
 }
 
@@ -179,6 +185,7 @@ async fn absent_endpoint_connection_is_bounded() {
 #[cfg(unix)]
 #[tokio::test]
 async fn stale_owned_socket_recovers_but_unrelated_file_is_preserved() {
+    use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::UnixListener;
 
     let (_directory, endpoint) = endpoint();
@@ -187,6 +194,8 @@ async fn stale_owned_socket_recovers_but_unrelated_file_is_preserved() {
         .runtime_dir()
         .join(format!("codex-notifier-{}.sock", endpoint.profile()));
     let stale = UnixListener::bind(&socket_path).expect("stale listener");
+    std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
+        .expect("secure stale socket permissions");
     drop(stale);
     let server = IpcServer::bind(endpoint.clone(), IpcPolicy::default()).expect("recover stale");
     drop(server);

@@ -135,6 +135,8 @@ pub struct IpcServer {
     endpoint: IpcEndpoint,
     policy: IpcPolicy,
     listener: Listener,
+    #[cfg(unix)]
+    socket_identity: crate::endpoint::UnixSocketIdentity,
 }
 
 impl IpcServer {
@@ -148,7 +150,7 @@ impl IpcServer {
         #[cfg(unix)]
         {
             endpoint.prepare_runtime_dir()?;
-            endpoint.validate_existing_socket()?;
+            endpoint.recover_stale_socket()?;
         }
         let name = endpoint.name()?;
         let options = ListenerOptions::new().name(name);
@@ -156,19 +158,17 @@ impl IpcServer {
         let options = listener_options(options);
         #[cfg(windows)]
         let options = listener_options(options)?;
-        let listener = options.create_tokio().map_err(|error| {
-            if error.kind() == io::ErrorKind::AddrInUse {
-                IpcError::AlreadyRunning
-            } else if error.kind() == io::ErrorKind::PermissionDenied {
-                IpcError::InsecureEndpoint
-            } else {
-                IpcError::TransportFailure
-            }
-        })?;
+        let listener = options
+            .create_tokio()
+            .map_err(|error| map_listener_error(&error))?;
+        #[cfg(unix)]
+        let socket_identity = endpoint.socket_identity()?;
         Ok(Self {
             endpoint,
             policy,
             listener,
+            #[cfg(unix)]
+            socket_identity,
         })
     }
 
@@ -237,7 +237,7 @@ impl IpcServer {
 impl Drop for IpcServer {
     fn drop(&mut self) {
         #[cfg(unix)]
-        self.endpoint.remove_owned_socket();
+        self.endpoint.remove_owned_socket(self.socket_identity);
     }
 }
 
@@ -358,6 +358,24 @@ fn map_read_error(error: &io::Error) -> IpcError {
 }
 
 #[cfg(unix)]
+fn map_listener_error(error: &io::Error) -> IpcError {
+    match error.kind() {
+        io::ErrorKind::AddrInUse => IpcError::AlreadyRunning,
+        io::ErrorKind::PermissionDenied | io::ErrorKind::InvalidInput => IpcError::InsecureEndpoint,
+        _ => IpcError::TransportFailure,
+    }
+}
+
+#[cfg(windows)]
+fn map_listener_error(error: &io::Error) -> IpcError {
+    match error.kind() {
+        io::ErrorKind::AddrInUse | io::ErrorKind::PermissionDenied => IpcError::AlreadyRunning,
+        io::ErrorKind::InvalidInput => IpcError::InsecureEndpoint,
+        _ => IpcError::TransportFailure,
+    }
+}
+
+#[cfg(unix)]
 async fn connect(endpoint: &IpcEndpoint, deadline: Duration) -> Result<Stream, IpcError> {
     let options = ConnectOptions::new()
         .name(endpoint.name()?)
@@ -388,7 +406,7 @@ async fn connect(
 #[cfg(unix)]
 fn listener_options(options: ListenerOptions<'static>) -> ListenerOptions<'static> {
     use interprocess::os::unix::local_socket::ListenerOptionsExt;
-    options.mode(0o600).reclaim_name(true).try_overwrite(false)
+    options.mode(0o600).reclaim_name(false).try_overwrite(false)
 }
 
 #[cfg(windows)]
@@ -457,13 +475,19 @@ fn validate_client_peer(stream: &WindowsClientStream<Bytes>) -> Result<(), IpcEr
 
 #[cfg(windows)]
 fn validate_windows_peer_pid(peer_pid: u32) -> Result<(), IpcError> {
-    use sysinfo::{Pid, ProcessesToUpdate, System, get_current_pid};
+    use sysinfo::{
+        Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind, get_current_pid,
+    };
 
     let current_pid = get_current_pid().map_err(|_| IpcError::UnauthorizedPeer)?;
     let peer_pid = Pid::from_u32(peer_pid);
     let process_ids = [current_pid, peer_pid];
     let mut system = System::new();
-    system.refresh_processes(ProcessesToUpdate::Some(&process_ids), true);
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&process_ids),
+        true,
+        ProcessRefreshKind::nothing().with_user(UpdateKind::Always),
+    );
     let current_user = system
         .process(current_pid)
         .and_then(sysinfo::Process::user_id)
