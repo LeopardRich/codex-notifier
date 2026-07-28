@@ -26,7 +26,7 @@ pub enum PersistenceErrorCode {
     MigrationFailed,
     /// A bounded policy or transition input is invalid.
     InvalidValue,
-    /// Another SQLite operation failed safely.
+    /// Another `SQLite` operation failed safely.
     DatabaseFailure,
 }
 
@@ -54,10 +54,10 @@ impl PersistenceErrorCode {
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 #[non_exhaustive]
 pub enum PersistenceError {
-    /// SQLite reports a busy or locked database.
+    /// `SQLite` reports a busy or locked database.
     #[error("state database is locked")]
     DatabaseLocked,
-    /// SQLite cannot create or write the selected database.
+    /// `SQLite` cannot create or write the selected database.
     #[error("state database is not writable")]
     StorageUnwritable,
     /// The queue is at its configured hard limit.
@@ -84,7 +84,7 @@ pub enum PersistenceError {
     /// A policy or transition input violates a fixed bound.
     #[error("persistence value is invalid")]
     InvalidValue,
-    /// Another SQLite operation failed.
+    /// Another `SQLite` operation failed.
     #[error("state database operation failed")]
     DatabaseFailure,
 }

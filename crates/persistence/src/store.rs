@@ -1,4 +1,4 @@
-//! Transactional SQLite store, migrations, and row validation.
+//! Transactional `SQLite` store, migrations, and row validation.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -16,7 +16,7 @@ use crate::{
     StorePolicy,
 };
 
-/// Current on-disk SQLite schema version.
+/// Current on-disk `SQLite` schema version.
 pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 const MAX_SAFE_CODE_BYTES: usize = 64;
 const MAX_LEASE_TOKEN_BYTES: usize = 64;
@@ -57,7 +57,7 @@ CREATE INDEX IF NOT EXISTS dead_letters_time_idx
     ON dead_letters(failed_at_ms, event_id);
 ";
 
-/// Single-connection transactional SQLite outbox and deduplication store.
+/// Single-connection transactional `SQLite` outbox and deduplication store.
 pub struct SqliteStore {
     connection: Connection,
     policy: StorePolicy,
@@ -838,21 +838,27 @@ fn map_migration_error(error: SqliteError) -> PersistenceError {
 }
 
 fn map_sqlite_error(error: SqliteError) -> PersistenceError {
-    if let SqliteError::SqliteFailure(failure, _) = error {
-        return match failure.code {
-            SqliteErrorCode::DatabaseBusy | SqliteErrorCode::DatabaseLocked => {
-                PersistenceError::DatabaseLocked
+    match error {
+        SqliteError::SqliteFailure(failure, source_message) => {
+            drop(source_message);
+            match failure.code {
+                SqliteErrorCode::DatabaseBusy | SqliteErrorCode::DatabaseLocked => {
+                    PersistenceError::DatabaseLocked
+                }
+                SqliteErrorCode::ReadOnly
+                | SqliteErrorCode::CannotOpen
+                | SqliteErrorCode::DiskFull
+                | SqliteErrorCode::SystemIoFailure
+                | SqliteErrorCode::PermissionDenied => PersistenceError::StorageUnwritable,
+                SqliteErrorCode::DatabaseCorrupt | SqliteErrorCode::NotADatabase => {
+                    PersistenceError::CorruptData
+                }
+                _ => PersistenceError::DatabaseFailure,
             }
-            SqliteErrorCode::ReadOnly
-            | SqliteErrorCode::CannotOpen
-            | SqliteErrorCode::DiskFull
-            | SqliteErrorCode::SystemIoFailure
-            | SqliteErrorCode::PermissionDenied => PersistenceError::StorageUnwritable,
-            SqliteErrorCode::DatabaseCorrupt | SqliteErrorCode::NotADatabase => {
-                PersistenceError::CorruptData
-            }
-            _ => PersistenceError::DatabaseFailure,
-        };
+        }
+        other => {
+            drop(other);
+            PersistenceError::DatabaseFailure
+        }
     }
-    PersistenceError::DatabaseFailure
 }
