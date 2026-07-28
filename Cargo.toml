@@ -21,11 +21,15 @@ license = "MIT"
 [workspace.dependencies]
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
+rusqlite = { version = "0.37.0", features = ["bundled"] }
 thiserror = "2.0.12"
 time = { version = "0.3.41", features = ["formatting", "parsing"] }
 toml = "0.9.5"
 unicode-normalization = "0.1.24"
 uuid = "1.16.0"
+
+[workspace.dependencies.tempfile]
+version = "3.20.0"
 
 [workspace.lints.rust]
 missing_docs = "warn"

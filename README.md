@@ -226,10 +226,18 @@ extensions.
 - Submission from `emit` to the local agent is at-least-once.
 - Remote delivery is at-least-once; the desktop deduplicates by `event_id`.
 - An event is removed from the outbox only after a structured acknowledgement.
+- SQLite schema version 1 applies `IMMEDIATE` transactions to enqueue, lease,
+  acknowledge, retry, dead-letter, receipt, retention, and migration changes.
+  Expired leases become eligible at the exact expiry boundary. A successful
+  acknowledgement writes a deduplication receipt before deleting the canonical
+  outbox payload in the same transaction.
 - Retries use exponential backoff with jitter and configurable upper bounds.
 - Queue size, event size, retry age, and receipt retention are bounded.
 - Permanent validation or authentication failures enter a small dead-letter
   record containing the reason and safe metadata, not the full payload.
+- Stored outbox rows are revalidated against their indexed event ID and kind
+  when leased. Receipts and dead letters contain no canonical JSON or display
+  text, and schema migration failures leave the source transaction unchanged.
 - Notification API success means the OS accepted the notification, not that the
   user saw or opened it.
 
