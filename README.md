@@ -6,13 +6,12 @@
 It turns Codex events that need human attention into native Windows or macOS
 notifications, including events produced by Codex running on a remote server.
 
-> Status: Stages 01-07 are complete: compatibility evidence, architecture
+> Status: Stages 01-08 are complete: compatibility evidence, architecture
 > decisions, the Rust workspace, three-platform quality gates, and the
 > canonical event domain model, layered configuration, and cross-platform path
 > rules are established, together with structured redacted logging and the
-> transactional SQLite outbox/deduplication store. The Stage 08 local IPC
-> implementation is awaiting three-platform verification; SSH and native
-> notification adapters have not been implemented yet.
+> transactional SQLite outbox/deduplication store and bounded per-user local
+> IPC. SSH and native notification adapters have not been implemented yet.
 
 The implementation sequence and acceptance gates are defined in
 [`stages.md`](stages.md).

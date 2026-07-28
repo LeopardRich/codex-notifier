@@ -1,6 +1,6 @@
 # Stage 08 Verification
 
-- Status: Pending CI
+- Status: Complete
 - Date: 2026-07-29
 - Host: Windows 10 Pro 22H2 (19045.6466)
 
@@ -17,7 +17,7 @@
 - Active-listener protection, owned stale Unix socket recovery, conservative
   cleanup, and rejection of unsafe endpoint types, owners, and permissions.
 
-## Pending Verification
+## Verified
 
 - IPC unit and contract tests cover valid structured submission, status/error
   validation, identity mismatch rejection, oversized/truncated/slow frames,
@@ -27,8 +27,13 @@
 - `cargo fmt --all -- --check` exits 0 locally.
 - `cargo clippy -p codex-notifier-ipc --all-targets -- -D warnings` exits 0
   locally.
-- Full workspace formatting, Clippy, and tests must pass on the GitHub Actions
-  Windows, macOS, and Linux jobs before this stage is complete.
+- `cargo test --workspace` passes all Stage 04-08 tests in CI. The IPC crate
+  runs two unit and eight contract tests on Windows, and three unit and nine
+  contract tests on macOS/Linux, including a real child-process submission.
+- GitHub Actions run
+  [`30398042844`](https://github.com/LeopardRich/codex-notifier/actions/runs/30398042844)
+  completed successfully for `windows-desktop`, `macos-desktop`, and
+  `linux-relay` from commit `29e3e23`.
 
 ## Local Environment Note
 
@@ -37,4 +42,5 @@
   the installed Rust GNU environment. No machine toolchain, Codex login, or
   global hook was modified as a workaround.
 
-Stage 08 remains incomplete until the three-platform CI evidence is recorded.
+Stage 08 is complete. Agent lifecycle and role routing remain assigned to
+Stage 09.
