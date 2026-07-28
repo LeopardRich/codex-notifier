@@ -237,16 +237,16 @@ sequenceDiagram
 配置按以下优先级叠加：内置默认值、用户配置、指定配置档以及显式 CLI 覆盖项。
 环境变量只用于部署集成，不承载事件载荷或私钥。
 
-规划的配置组如下：
+配置模式版本 1 已实现以下配置组：
 
 | 配置组 | 所属设置示例 |
 | --- | --- |
-| `agent` | 运行角色、IPC 端点、自启动行为、关闭超时。 |
-| `codex` | 事件源适配器、接受的事件类型、已安装 hook 的所有权。 |
-| `desktop` | 原生通知选项、免打扰时间、标题与正文隐私级别。 |
-| `relay` | SSH 主机别名、目标配置档、超时与重试策略。 |
-| `storage` | 状态路径、队列上限、投递与死信记录保留期。 |
-| `logging` | 日志级别、输出位置、脱敏与轮转。 |
+| `agent` | 显式桌面端/中继端角色、配置档、逻辑 IPC 端点和关闭超时。 |
+| `codex` | 事件源适配器选择以及接受的任务完成/审批请求事件类型。 |
+| `desktop` | 免打扰行为以及私密/公开通知内容策略。 |
+| `relay` | 预配置的 OpenSSH 主机别名、目标配置档和连接超时。 |
+| `storage` | 绝对状态路径和有界队列容量。 |
+| `logging` | 日志级别和绝对日志目录；配置诊断信息会脱敏。 |
 
 默认通知隐私模式使用通用标题和正文，不显示主机、项目、命令、提示词、回复或路径。
 应用级免打扰默认关闭，操作系统专注/勿扰策略始终优先；显式启用应用免打扰后，事件
@@ -255,6 +255,18 @@ sequenceDiagram
 
 Windows 上的用户配置与状态遵循 `%APPDATA%` 和 `%LOCALAPPDATA%`，macOS 遵循
 `~/Library/Application Support`。中继主机在可用时遵循 XDG 基础目录规范。
+
+主配置文件在 Windows 上为 `%APPDATA%\codex-notifier\config.toml`，在 macOS
+上为 `~/Library/Application Support/codex-notifier/config.toml`，在 XDG
+中继主机上为 `${XDG_CONFIG_HOME:-~/.config}/codex-notifier/config.toml`。
+状态和日志分别使用 `%LOCALAPPDATA%`、对应的 macOS Application Support/Logs
+目录，或 `${XDG_STATE_HOME:-~/.local/state}`。显式路径基目录以及配置的状态/
+日志目录必须为绝对路径，最终状态目录必须可写。
+
+当前 TOML 文件都必须包含 `config_version = 1`。加载器可迁移有界的版本 0
+`role` 和可选 `ssh_host` 键。未知设置、不支持的版本、非法角色/端点以及禁止的
+敏感键都会产生稳定且安全的错误分类。私钥、访问令牌、密码、提示词、模型输出和
+原始事件载荷不是合法配置值，也不会出现在配置调试输出中。
 
 ## 规划命令界面
 

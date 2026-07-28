@@ -258,16 +258,16 @@ profile-specific configuration, and explicit CLI overrides. Environment
 variables are reserved for deployment integration and must not carry event
 payloads or private keys.
 
-The planned configuration groups are:
+Configuration schema version 1 implements these groups:
 
 | Group | Examples of owned settings |
 | --- | --- |
-| `agent` | Runtime role, IPC endpoint, startup behavior, shutdown timeout. |
-| `codex` | Source adapter, accepted event kinds, installed hook ownership. |
-| `desktop` | Native adapter options, quiet hours, title/body privacy level. |
-| `relay` | SSH host alias, destination profile, timeouts, retry policy. |
-| `storage` | State path, queue limits, receipt and dead-letter retention. |
-| `logging` | Level, destination, redaction, rotation. |
+| `agent` | Explicit desktop/relay role, profile, logical IPC endpoint, shutdown timeout. |
+| `codex` | Source-adapter selector and accepted task-completion/approval event kinds. |
+| `desktop` | Quiet-hours behavior and private/public notification content policy. |
+| `relay` | Preconfigured OpenSSH host alias, destination profile, connection timeout. |
+| `storage` | Absolute state path and bounded queue capacity. |
+| `logging` | Level and absolute log directory; configuration diagnostics are redacted. |
 
 The default notification privacy mode uses generic title/body text with no
 host, project, command, prompt, response, or path. Application quiet hours are
@@ -278,6 +278,22 @@ events. See [ADR-0003](docs/decisions/0003-notification-privacy.md).
 User configuration and state follow platform conventions: `%APPDATA%` and
 `%LOCALAPPDATA%` on Windows, and `~/Library/Application Support` on macOS.
 Relay hosts follow the XDG base directory specification when available.
+
+The main file is `%APPDATA%\codex-notifier\config.toml` on Windows,
+`~/Library/Application Support/codex-notifier/config.toml` on macOS, and
+`${XDG_CONFIG_HOME:-~/.config}/codex-notifier/config.toml` on XDG relay hosts.
+State and logs use `%LOCALAPPDATA%`, the corresponding macOS Application
+Support/Logs directories, or `${XDG_STATE_HOME:-~/.local/state}`. Explicit path
+bases and configured state/log directories must be absolute, and the final
+state directory must be writable.
+
+Every current TOML file requires `config_version = 1`. The loader can migrate
+the bounded legacy version 0 `role` and optional `ssh_host` keys. Unknown
+settings, unsupported versions, invalid roles/endpoints, and prohibited
+sensitive keys fail with stable safe error classifications. Private keys,
+access tokens, passwords, prompts, model output, and raw event payloads are
+not valid configuration values and are never included in configuration debug
+output.
 
 ## Planned Command Surface
 
