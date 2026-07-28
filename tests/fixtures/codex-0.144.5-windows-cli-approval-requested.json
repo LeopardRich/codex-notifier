@@ -1,0 +1,47 @@
+{
+  "fixture_version": 1,
+  "source": {
+    "codex_cli_version": "0.144.5",
+    "interface": "codex app-server",
+    "host_os": "Windows 10 Pro 22H2",
+    "captured_at": "2026-07-28T17:27:30.047Z",
+    "external_process_invoked": true
+  },
+  "payload": {
+    "observed_keys": [
+      "id",
+      "method",
+      "params"
+    ],
+    "id": "<redacted-request-id>",
+    "method": "item/commandExecution/requestApproval",
+    "params": {
+      "observed_keys": [
+        "availableDecisions",
+        "command",
+        "commandActions",
+        "cwd",
+        "environmentId",
+        "itemId",
+        "proposedExecpolicyAmendment",
+        "startedAtMs",
+        "threadId",
+        "turnId"
+      ],
+      "threadId": "<redacted-thread-id>",
+      "turnId": "<redacted-turn-id>",
+      "itemId": "<redacted-item-id>",
+      "reason": null,
+      "command": "<redacted-command>",
+      "cwd": "<redacted-path>",
+      "commandActions": "<redacted-command-actions>",
+      "proposedExecpolicyAmendment": "<redacted-amendment>",
+      "networkApprovalContext": null,
+      "availableDecisions": [
+        "accept",
+        "acceptWithExecpolicyAmendment",
+        "cancel"
+      ]
+    }
+  }
+}

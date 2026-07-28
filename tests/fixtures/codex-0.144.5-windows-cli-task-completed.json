@@ -1,0 +1,32 @@
+{
+  "fixture_version": 1,
+  "source": {
+    "codex_cli_version": "0.144.5",
+    "interface": "codex exec",
+    "host_os": "Windows 10 Pro 22H2",
+    "captured_at": "2026-07-28T17:16:16.103Z",
+    "external_process_invoked": true
+  },
+  "payload": {
+    "observed_keys": [
+      "cwd",
+      "hook_event_name",
+      "last_assistant_message",
+      "model",
+      "permission_mode",
+      "session_id",
+      "stop_hook_active",
+      "transcript_path",
+      "turn_id"
+    ],
+    "session_id": "<redacted-session-id>",
+    "transcript_path": null,
+    "cwd": "<redacted-path>",
+    "hook_event_name": "Stop",
+    "model": "<redacted-model>",
+    "turn_id": "<redacted-turn-id>",
+    "permission_mode": "bypassPermissions",
+    "stop_hook_active": false,
+    "last_assistant_message": "<redacted-message>"
+  }
+}

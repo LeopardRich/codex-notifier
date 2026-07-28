@@ -1,0 +1,27 @@
+[workspace]
+resolver = "3"
+members = [
+    "apps/codex-notifier",
+    "crates/application",
+    "crates/codex-source",
+    "crates/config",
+    "crates/core",
+    "crates/ipc",
+    "crates/native-notification",
+    "crates/persistence",
+    "crates/ssh-transport",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
