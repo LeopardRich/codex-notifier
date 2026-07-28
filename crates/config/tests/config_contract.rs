@@ -89,34 +89,34 @@ max_queue_entries = 20
 #[test]
 fn resolves_windows_and_macos_paths_without_host_environment() {
     let windows = windows_paths();
-    assert_eq!(
+    assert_path(
         windows.config_file(),
-        Path::new(r"C:\Users\fixture\AppData\Roaming\codex-notifier\config.toml")
+        r"C:\Users\fixture\AppData\Roaming\codex-notifier\config.toml",
     );
-    assert_eq!(
+    assert_path(
         windows.state_dir(),
-        Path::new(r"C:\Users\fixture\AppData\Local\codex-notifier")
+        r"C:\Users\fixture\AppData\Local\codex-notifier",
     );
-    assert_eq!(
+    assert_path(
         windows.log_dir(),
-        Path::new(r"C:\Users\fixture\AppData\Local\codex-notifier\logs")
+        r"C:\Users\fixture\AppData\Local\codex-notifier\logs",
     );
 
     let macos = PathEnvironment::new()
         .with_home("/Users/fixture")
         .resolve(Platform::MacOs)
         .expect("macOS paths");
-    assert_eq!(
+    assert_path(
         macos.config_file(),
-        Path::new("/Users/fixture/Library/Application Support/codex-notifier/config.toml")
+        "/Users/fixture/Library/Application Support/codex-notifier/config.toml",
     );
-    assert_eq!(
+    assert_path(
         macos.state_dir(),
-        Path::new("/Users/fixture/Library/Application Support/codex-notifier/state")
+        "/Users/fixture/Library/Application Support/codex-notifier/state",
     );
-    assert_eq!(
+    assert_path(
         macos.log_dir(),
-        Path::new("/Users/fixture/Library/Logs/codex-notifier")
+        "/Users/fixture/Library/Logs/codex-notifier",
     );
 }
 
@@ -128,27 +128,27 @@ fn resolves_explicit_and_fallback_xdg_paths() {
         .with_xdg_state_home("/srv/state")
         .resolve(Platform::Xdg)
         .expect("explicit XDG paths");
-    assert_eq!(
+    assert_path(
         explicit.config_file(),
-        Path::new("/srv/config/codex-notifier/config.toml")
+        "/srv/config/codex-notifier/config.toml",
     );
-    assert_eq!(explicit.state_dir(), Path::new("/srv/state/codex-notifier"));
+    assert_path(explicit.state_dir(), "/srv/state/codex-notifier");
 
     let fallback = PathEnvironment::new()
         .with_home("/home/fixture")
         .resolve(Platform::Xdg)
         .expect("fallback XDG paths");
-    assert_eq!(
+    assert_path(
         fallback.config_file(),
-        Path::new("/home/fixture/.config/codex-notifier/config.toml")
+        "/home/fixture/.config/codex-notifier/config.toml",
     );
-    assert_eq!(
+    assert_path(
         fallback.state_dir(),
-        Path::new("/home/fixture/.local/state/codex-notifier")
+        "/home/fixture/.local/state/codex-notifier",
     );
-    assert_eq!(
+    assert_path(
         fallback.log_dir(),
-        Path::new("/home/fixture/.local/state/codex-notifier/logs")
+        "/home/fixture/.local/state/codex-notifier/logs",
     );
 }
 
@@ -336,4 +336,8 @@ fn validates_identifier_numeric_and_path_boundaries() {
 
 fn assert_error(cli: CliOverrides, expected: &ConfigError) {
     assert_eq!(&load(None, None, cli).expect_err("must reject"), expected);
+}
+
+fn assert_path(actual: &Path, expected: &str) {
+    assert_eq!(actual.to_str(), Some(expected));
 }

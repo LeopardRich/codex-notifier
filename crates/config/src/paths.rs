@@ -87,40 +87,45 @@ impl PathEnvironment {
                 let config_base = required_absolute(self.windows_app_data.as_deref(), platform)?;
                 let state_base =
                     required_absolute(self.windows_local_app_data.as_deref(), platform)?;
-                let config_dir = config_base.join(PRODUCT_DIRECTORY);
-                let state_dir = state_base.join(PRODUCT_DIRECTORY);
+                let config_dir = join_for(config_base, platform, &[PRODUCT_DIRECTORY])?;
+                let state_dir = join_for(state_base, platform, &[PRODUCT_DIRECTORY])?;
                 Ok(ConfigPaths {
-                    config_file: config_dir.join("config.toml"),
-                    log_dir: state_dir.join("logs"),
+                    config_file: join_for(&config_dir, platform, &["config.toml"])?,
+                    log_dir: join_for(&state_dir, platform, &["logs"])?,
                     state_dir,
                 })
             }
             Platform::MacOs => {
                 let home = required_absolute(self.home.as_deref(), platform)?;
-                let application_support = home
-                    .join("Library")
-                    .join("Application Support")
-                    .join(PRODUCT_DIRECTORY);
+                let application_support = join_for(
+                    home,
+                    platform,
+                    &["Library", "Application Support", PRODUCT_DIRECTORY],
+                )?;
                 Ok(ConfigPaths {
-                    config_file: application_support.join("config.toml"),
-                    state_dir: application_support.join("state"),
-                    log_dir: home.join("Library").join("Logs").join(PRODUCT_DIRECTORY),
+                    config_file: join_for(&application_support, platform, &["config.toml"])?,
+                    state_dir: join_for(&application_support, platform, &["state"])?,
+                    log_dir: join_for(home, platform, &["Library", "Logs", PRODUCT_DIRECTORY])?,
                 })
             }
             Platform::Xdg => {
                 let home = required_absolute(self.home.as_deref(), platform)?;
                 let config_base = match self.xdg_config_home.as_deref() {
                     Some(path) => required_absolute(Some(path), platform)?.to_owned(),
-                    None => home.join(".config"),
+                    None => join_for(home, platform, &[".config"])?,
                 };
                 let state_base = match self.xdg_state_home.as_deref() {
                     Some(path) => required_absolute(Some(path), platform)?.to_owned(),
-                    None => home.join(".local").join("state"),
+                    None => join_for(home, platform, &[".local", "state"])?,
                 };
-                let state_dir = state_base.join(PRODUCT_DIRECTORY);
+                let state_dir = join_for(&state_base, platform, &[PRODUCT_DIRECTORY])?;
                 Ok(ConfigPaths {
-                    config_file: config_base.join(PRODUCT_DIRECTORY).join("config.toml"),
-                    log_dir: state_dir.join("logs"),
+                    config_file: join_for(
+                        &config_base,
+                        platform,
+                        &[PRODUCT_DIRECTORY, "config.toml"],
+                    )?,
+                    log_dir: join_for(&state_dir, platform, &["logs"])?,
                     state_dir,
                 })
             }
@@ -161,6 +166,27 @@ fn required_absolute(path: Option<&Path>, platform: Platform) -> Result<&Path, C
         .ok_or(ConfigError::MissingPathBase)
 }
 
+fn join_for(base: &Path, platform: Platform, components: &[&str]) -> Result<PathBuf, ConfigError> {
+    let mut value = base
+        .to_str()
+        .ok_or(ConfigError::MissingPathBase)?
+        .to_owned();
+    let separator = match platform {
+        Platform::Windows => {
+            value = value.replace('/', "\\");
+            '\\'
+        }
+        Platform::MacOs | Platform::Xdg => '/',
+    };
+    for component in components {
+        if !value.ends_with(separator) {
+            value.push(separator);
+        }
+        value.push_str(component);
+    }
+    Ok(PathBuf::from(value))
+}
+
 pub(crate) fn is_absolute_any(path: &Path) -> bool {
     is_absolute_for(path, Platform::Windows)
         || is_absolute_for(path, Platform::MacOs)
@@ -168,7 +194,9 @@ pub(crate) fn is_absolute_any(path: &Path) -> bool {
 }
 
 fn is_absolute_for(path: &Path, platform: Platform) -> bool {
-    let value = path.to_string_lossy();
+    let Some(value) = path.to_str() else {
+        return false;
+    };
     match platform {
         Platform::Windows => {
             let bytes = value.as_bytes();
