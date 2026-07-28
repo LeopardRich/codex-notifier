@@ -86,7 +86,7 @@ impl AgentHost {
         })
     }
 
-    /// Composes validated configuration, local IPC, SQLite, and the selected
+    /// Composes validated configuration, local IPC, `SQLite`, and the selected
     /// role adapter.
     ///
     /// # Errors
@@ -246,14 +246,14 @@ fn acknowledgement_for(
     }
 }
 
-/// Thread-safe SQLite implementation of the durable agent queue port.
+/// Thread-safe `SQLite` implementation of the durable agent queue port.
 pub struct SqliteAgentQueue {
     store: Mutex<SqliteStore>,
     next_lease: AtomicU64,
 }
 
 impl SqliteAgentQueue {
-    /// Wraps an initialized SQLite store for bounded multi-worker use.
+    /// Wraps an initialized `SQLite` store for bounded multi-worker use.
     #[must_use]
     pub const fn new(store: SqliteStore) -> Self {
         Self {
@@ -272,7 +272,7 @@ impl AgentQueue for SqliteAgentQueue {
         let outcome = self
             .lock()?
             .enqueue(event, now_ms())
-            .map_err(map_persistence_error)?;
+            .map_err(|error| map_persistence_error(&error))?;
         Ok(match outcome {
             EnqueueOutcome::Enqueued => EnqueueResult::Enqueued,
             EnqueueOutcome::Duplicate => EnqueueResult::Duplicate,
@@ -284,7 +284,7 @@ impl AgentQueue for SqliteAgentQueue {
         let token = format!("w{worker}_{sequence}");
         self.lock()?
             .lease_next(now_ms(), &token)
-            .map_err(map_persistence_error)?
+            .map_err(|error| map_persistence_error(&error))?
             .map(|leased| AgentLease::new(leased.event().clone(), leased.lease_token()))
             .transpose()
     }
@@ -292,7 +292,7 @@ impl AgentQueue for SqliteAgentQueue {
     fn acknowledge(&self, lease: &AgentLease) -> Result<(), AgentQueueError> {
         self.lock()?
             .acknowledge(lease.event().event_id(), lease.token(), now_ms())
-            .map_err(map_persistence_error)
+            .map_err(|error| map_persistence_error(&error))
     }
 
     fn retry(&self, lease: &AgentLease, code: &SafeErrorCode) -> Result<(), AgentQueueError> {
@@ -307,7 +307,7 @@ impl AgentQueue for SqliteAgentQueue {
                 code.as_str(),
             )
             .map(|_| ())
-            .map_err(map_persistence_error)
+            .map_err(|error| map_persistence_error(&error))
     }
 
     fn release(&self, lease: &AgentLease, code: &SafeErrorCode) -> Result<(), AgentQueueError> {
@@ -318,7 +318,7 @@ impl AgentQueue for SqliteAgentQueue {
                 now_ms(),
                 code.as_str(),
             )
-            .map_err(map_persistence_error)
+            .map_err(|error| map_persistence_error(&error))
     }
 
     fn dead_letter(&self, lease: &AgentLease, code: &SafeErrorCode) -> Result<(), AgentQueueError> {
@@ -329,11 +329,11 @@ impl AgentQueue for SqliteAgentQueue {
                 code.as_str(),
                 now_ms(),
             )
-            .map_err(map_persistence_error)
+            .map_err(|error| map_persistence_error(&error))
     }
 }
 
-fn map_persistence_error(error: PersistenceError) -> AgentQueueError {
+fn map_persistence_error(error: &PersistenceError) -> AgentQueueError {
     match error {
         PersistenceError::QueueFull => AgentQueueError::Full,
         PersistenceError::EventExpired => AgentQueueError::Expired,
