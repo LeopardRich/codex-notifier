@@ -220,19 +220,61 @@ jobs:
               $exitCode = $directCode
             }
 
-            Start-Sleep -Seconds 2
+            function Save-ProbeScreen([string] $Path) {
+              $screen = [System.Windows.Forms.SystemInformation]::VirtualScreen
+              $bitmap = New-Object System.Drawing.Bitmap($screen.Width, $screen.Height)
+              $screenGraphics = [System.Drawing.Graphics]::FromImage($bitmap)
+              try {
+                $screenGraphics.CopyFromScreen($screen.Left, $screen.Top, 0, 0, $bitmap.Size)
+                $bitmap.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
+              }
+              finally {
+                $screenGraphics.Dispose()
+                $bitmap.Dispose()
+              }
+            }
+
             Add-Type -AssemblyName System.Windows.Forms
-            $screen = [System.Windows.Forms.SystemInformation]::VirtualScreen
-            $bitmap = New-Object System.Drawing.Bitmap($screen.Width, $screen.Height)
-            $screenGraphics = [System.Drawing.Graphics]::FromImage($bitmap)
-            try {
-              $screenGraphics.CopyFromScreen($screen.Left, $screen.Top, 0, 0, $bitmap.Size)
-              $bitmap.Save('target\windows11-screen.png', [System.Drawing.Imaging.ImageFormat]::Png)
+            Start-Sleep -Seconds 2
+            Save-ProbeScreen 'target\windows11-screen.png'
+
+            Add-Type -TypeDefinition @'
+            using System;
+            using System.Runtime.InteropServices;
+
+            public static class ProbeNotificationCenter
+            {
+                [DllImport("user32.dll")]
+                private static extern void keybd_event(
+                    byte virtualKey, byte scanCode, uint flags, UIntPtr extraInfo);
+
+                public static void Toggle()
+                {
+                    keybd_event(0x5B, 0, 0, UIntPtr.Zero);
+                    keybd_event(0x4E, 0, 0, UIntPtr.Zero);
+                    keybd_event(0x4E, 0, 2, UIntPtr.Zero);
+                    keybd_event(0x5B, 0, 2, UIntPtr.Zero);
+                }
             }
-            finally {
-              $screenGraphics.Dispose()
-              $bitmap.Dispose()
-            }
+            '@
+            [ProbeNotificationCenter]::Toggle()
+            Start-Sleep -Seconds 2
+            Save-ProbeScreen 'target\windows11-notification-center.png'
+
+            Add-Type -AssemblyName UIAutomationClient
+            Add-Type -AssemblyName UIAutomationTypes
+            $root = [System.Windows.Automation.AutomationElement]::RootElement
+            $textCondition = New-Object System.Windows.Automation.PropertyCondition(
+              [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+              [System.Windows.Automation.ControlType]::Text)
+            @($root.FindAll(
+              [System.Windows.Automation.TreeScope]::Descendants,
+              $textCondition) | Where-Object {
+                $_.Current.Name -match 'Codex Notifier|Codex task finished|Codex needs approval|Open Codex'
+              } | ForEach-Object {
+                "Name=$($_.Current.Name) AutomationId=$($_.Current.AutomationId)"
+              }) | Set-Content target\windows11-notification-center.txt
+            [ProbeNotificationCenter]::Toggle()
 
             $database = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Notifications\wpndatabase.db'
             $sqlite = Get-Command sqlite3 -ErrorAction SilentlyContinue
@@ -372,6 +414,117 @@ jobs:
       - name: Build macOS smoke executable
         run: cargo test -p codex-notifier-native-notification --test macos_smoke --no-run
 
+      - name: Create temporary code-signing identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          signing_directory="$RUNNER_TEMP/codex-notifier-signing"
+          keychain="$RUNNER_TEMP/codex-notifier-probe.keychain-db"
+          keychain_password='codex-notifier-probe'
+          identity_name='Codex Notifier Probe Signing'
+          mkdir -p "$signing_directory" target
+
+          cat >"$signing_directory/root.cnf" <<'EOF'
+          [req]
+          distinguished_name = subject
+          x509_extensions = extensions
+          prompt = no
+
+          [subject]
+          CN = Codex Notifier Probe Root
+          O = Codex Notifier Probe
+
+          [extensions]
+          basicConstraints = critical,CA:true
+          keyUsage = critical,keyCertSign,cRLSign
+          subjectKeyIdentifier = hash
+          authorityKeyIdentifier = keyid:always
+          EOF
+
+          cat >"$signing_directory/leaf.cnf" <<'EOF'
+          [req]
+          distinguished_name = subject
+          prompt = no
+
+          [subject]
+          CN = Codex Notifier Probe Signing
+          OU = CODEXPRB01
+          O = Codex Notifier Probe
+
+          [extensions]
+          basicConstraints = critical,CA:false
+          keyUsage = critical,digitalSignature
+          extendedKeyUsage = codeSigning
+          subjectKeyIdentifier = hash
+          authorityKeyIdentifier = keyid,issuer
+          EOF
+
+          /usr/bin/openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 1 \
+            -config "$signing_directory/root.cnf" \
+            -keyout "$signing_directory/root.key" \
+            -out "$signing_directory/root.pem"
+          /usr/bin/openssl req -new -newkey rsa:2048 -nodes -sha256 \
+            -config "$signing_directory/leaf.cnf" \
+            -keyout "$signing_directory/leaf.key" \
+            -out "$signing_directory/leaf.csr"
+          /usr/bin/openssl x509 -req -sha256 -days 1 \
+            -in "$signing_directory/leaf.csr" \
+            -CA "$signing_directory/root.pem" \
+            -CAkey "$signing_directory/root.key" \
+            -CAcreateserial \
+            -extfile "$signing_directory/leaf.cnf" \
+            -extensions extensions \
+            -out "$signing_directory/leaf.pem"
+          /usr/bin/openssl pkcs12 -export \
+            -inkey "$signing_directory/leaf.key" \
+            -in "$signing_directory/leaf.pem" \
+            -certfile "$signing_directory/root.pem" \
+            -out "$signing_directory/leaf.p12" \
+            -passout "pass:$keychain_password"
+
+          security list-keychains -d user >target/macos-original-keychains.txt
+          login_keychain=$(security default-keychain -d user | tr -d '"')
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$signing_directory/leaf.p12" \
+            -k "$keychain" \
+            -P "$keychain_password" \
+            -T /usr/bin/codesign
+          security add-trusted-cert -r trustRoot \
+            -k "$keychain" \
+            "$signing_directory/root.pem"
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -s \
+            -k "$keychain_password" \
+            "$keychain"
+          security list-keychains -d user -s "$keychain" "$login_keychain"
+
+          security find-identity -v -p codesigning "$keychain" \
+            >target/macos-signing-identities.txt
+          identity=$(awk -v name="$identity_name" \
+            'index($0, "\"" name "\"") { print $2; exit }' \
+            target/macos-signing-identities.txt)
+          if [[ -z "$identity" ]]; then
+            cat target/macos-signing-identities.txt
+            exit 1
+          fi
+          /usr/bin/openssl x509 \
+            -in "$signing_directory/leaf.pem" \
+            -noout \
+            -subject \
+            -issuer \
+            -dates \
+            -fingerprint \
+            -sha256 \
+            >target/macos-signing-certificate.txt
+          {
+            echo "CODEX_NOTIFIER_MACOS_SIGNING_IDENTITY=$identity"
+            echo "CODEX_NOTIFIER_MACOS_SIGNING_KEYCHAIN=$keychain"
+            echo "CODEX_NOTIFIER_MACOS_SIGNING_DIRECTORY=$signing_directory"
+          } >>"$GITHUB_ENV"
+
       - name: Exercise authorization and delivery
         id: macos-smoke
         continue-on-error: true
@@ -379,6 +532,7 @@ jobs:
         run: |
           set +e
           CODEX_NOTIFIER_MACOS_SMOKE_ROOT=/Applications \
+            CODEX_NOTIFIER_MACOS_SIGNING_IDENTITY="$CODEX_NOTIFIER_MACOS_SIGNING_IDENTITY" \
             cargo test -p codex-notifier-native-notification \
             --test macos_smoke \
             displays_task_completion_and_approval_request_notifications \
@@ -463,6 +617,22 @@ jobs:
           cat target/macos-ui.txt
           cat target/macos-smoke.log
           exit "$result"
+
+      - name: Remove temporary code-signing identity
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [[ -n "${CODEX_NOTIFIER_MACOS_SIGNING_KEYCHAIN:-}" ]]; then
+            security delete-keychain "$CODEX_NOTIFIER_MACOS_SIGNING_KEYCHAIN"
+          fi
+          login_keychain=$(security default-keychain -d user | tr -d '"')
+          if [[ -n "$login_keychain" ]]; then
+            security list-keychains -d user -s "$login_keychain"
+          fi
+          if [[ -n "${CODEX_NOTIFIER_MACOS_SIGNING_DIRECTORY:-}" ]]; then
+            rm -rf "$CODEX_NOTIFIER_MACOS_SIGNING_DIRECTORY"
+          fi
 
       - name: Upload macOS evidence
         if: always()

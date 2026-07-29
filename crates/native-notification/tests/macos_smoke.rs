@@ -37,6 +37,7 @@ mod macos {
 
     const RESULT_PATH_ENV: &str = "CODEX_NOTIFIER_MACOS_SMOKE_RESULT";
     const SMOKE_ROOT_ENV: &str = "CODEX_NOTIFIER_MACOS_SMOKE_ROOT";
+    const SIGNING_IDENTITY_ENV: &str = "CODEX_NOTIFIER_MACOS_SIGNING_IDENTITY";
     const TEST_NAME: &str = "displays_task_completion_and_approval_request_notifications";
     const NO_GUI_TEST_NAME: &str = "reports_real_no_gui_session";
     const EXECUTABLE_NAME: &str = "codex-notifier-macos-smoke";
@@ -238,18 +239,25 @@ mod macos {
         permissions.set_mode(0o755);
         fs::set_permissions(&bundled, permissions).expect("make smoke executable runnable");
 
+        let signing_identity =
+            std::env::var(SIGNING_IDENTITY_ENV).unwrap_or_else(|_| "-".to_owned());
         let signed = Command::new("/usr/bin/codesign")
-            .args([
-                "--force",
-                "--sign",
-                "-",
-                "--identifier",
-                CODEX_NOTIFIER_BUNDLE_ID,
-            ])
+            .args(["--force", "--sign"])
+            .arg(&signing_identity)
+            .args(["--identifier", CODEX_NOTIFIER_BUNDLE_ID])
             .arg(&bundle)
             .status()
-            .expect("run ad-hoc codesign for smoke bundle");
-        assert!(signed.success(), "ad-hoc codesign failed: {signed}");
+            .expect("run codesign for smoke bundle");
+        assert!(signed.success(), "codesign failed: {signed}");
+        let inspected = Command::new("/usr/bin/codesign")
+            .args(["--display", "--verbose=4"])
+            .arg(&bundle)
+            .status()
+            .expect("inspect smoke bundle signature");
+        assert!(
+            inspected.success(),
+            "codesign inspection failed: {inspected}"
+        );
         let registered = Command::new(
         "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
     )
