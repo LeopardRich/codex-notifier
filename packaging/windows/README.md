@@ -51,3 +51,6 @@ Session 0, native API unavailability, and delivery rejection separately. A
 successful `Show` means Windows accepted the Toast; it does not prove the user
 saw it. Focus Assist and Do Not Disturb remain higher-priority operating-system
 policy and are never bypassed.
+
+Windows Server editions are outside the Windows 10/11 desktop support scope.
+They report `unsupported_platform` before querying the desktop Toast API.

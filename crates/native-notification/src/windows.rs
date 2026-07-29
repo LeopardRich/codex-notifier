@@ -9,7 +9,10 @@ use windows::UI::Notifications::{
     ToastNotifier,
 };
 use windows::core::{HRESULT, HSTRING};
-use winreg::{RegKey, enums::HKEY_CURRENT_USER};
+use winreg::{
+    RegKey,
+    enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE},
+};
 
 use crate::{
     FocusStatus, NotificationBackend, NotificationDiagnostic, NotificationError,
@@ -22,6 +25,7 @@ pub const CODEX_NOTIFIER_APP_ID: &str = "LeopardRich.CodexNotifier";
 const MAX_APP_ID_BYTES: usize = 128;
 const ERROR_NOT_FOUND_HRESULT: i32 = -2_147_023_728;
 const APP_ID_REGISTRY_PREFIX: &str = r"Software\Classes\AppUserModelId";
+const WINDOWS_VERSION_REGISTRY_PATH: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
 
 /// Strict Windows application user model identifier.
 #[derive(Clone, Eq, PartialEq)]
@@ -67,6 +71,7 @@ impl fmt::Debug for WindowsApplicationId {
 /// `WinRT` Toast backend for an interactive Windows user session.
 pub struct WindowsNotificationBackend {
     application_id: WindowsApplicationId,
+    host: HostStatus,
     session: SessionStatus,
     registration: ApplicationRegistrationStatus,
 }
@@ -81,6 +86,7 @@ impl WindowsNotificationBackend {
         let registration = current_application_registration_status(&application_id);
         Self {
             application_id,
+            host: current_host_status(),
             session: current_session_status(),
             registration,
         }
@@ -93,6 +99,11 @@ impl WindowsNotificationBackend {
     }
 
     fn notifier(&self) -> Result<ToastNotifier, NotificationError> {
+        match self.host {
+            HostStatus::Desktop => {}
+            HostStatus::Server => return Err(NotificationError::UnsupportedPlatform),
+            HostStatus::Unknown => return Err(NotificationError::Unavailable),
+        }
         match self.session {
             SessionStatus::Interactive => {}
             SessionStatus::NonInteractive => {
@@ -256,6 +267,13 @@ enum SessionStatus {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HostStatus {
+    Desktop,
+    Server,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ApplicationRegistrationStatus {
     Registered,
     Missing,
@@ -273,6 +291,23 @@ fn current_application_registration_status(
             ApplicationRegistrationStatus::Missing
         }
         Err(_) => ApplicationRegistrationStatus::Unknown,
+    }
+}
+
+fn current_host_status() -> HostStatus {
+    let local_machine = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let installation_type = local_machine
+        .open_subkey(WINDOWS_VERSION_REGISTRY_PATH)
+        .and_then(|key| key.get_value::<String, _>("InstallationType"))
+        .ok();
+    classify_installation_type(installation_type.as_deref())
+}
+
+fn classify_installation_type(value: Option<&str>) -> HostStatus {
+    match value {
+        Some("Client") => HostStatus::Desktop,
+        Some("Server" | "Server Core") => HostStatus::Server,
+        _ => HostStatus::Unknown,
     }
 }
 
@@ -407,6 +442,23 @@ mod tests {
             map_query_error(HRESULT(-2_147_467_259)),
             NotificationError::Unavailable
         );
+    }
+
+    #[test]
+    fn windows_server_is_outside_the_desktop_notification_scope() {
+        assert_eq!(
+            classify_installation_type(Some("Client")),
+            HostStatus::Desktop
+        );
+        assert_eq!(
+            classify_installation_type(Some("Server")),
+            HostStatus::Server
+        );
+        assert_eq!(
+            classify_installation_type(Some("Server Core")),
+            HostStatus::Server
+        );
+        assert_eq!(classify_installation_type(None), HostStatus::Unknown);
     }
 
     #[test]

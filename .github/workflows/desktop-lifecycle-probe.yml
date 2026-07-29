@@ -47,6 +47,7 @@ jobs:
             if (-not (Select-String -Quiet -Path target\lifecycle-evidence\windows-status-installed.txt -Pattern '^agent_running=true$')) {
               throw 'installed agent is not running'
             }
+            $nativeReady = Select-String -Quiet -Path target\lifecycle-evidence\windows-status-installed.txt -Pattern '^notification=ready$'
             if (-not (Test-Path -LiteralPath $shortcut) -or -not (Test-Path -LiteralPath $identity)) {
               throw 'Windows notification identity is incomplete'
             }
@@ -69,7 +70,8 @@ jobs:
             Start-Sleep -Milliseconds 750
             & $source status |
               Set-Content target\lifecycle-evidence\windows-status-after-test.txt
-            if (-not (Select-String -Quiet -Path target\lifecycle-evidence\windows-status-after-test.txt -Pattern '^delivery_receipts=1$')) {
+            $expectedReceipts = if ($nativeReady) { 1 } else { 0 }
+            if (-not (Select-String -Quiet -Path target\lifecycle-evidence\windows-status-after-test.txt -Pattern "^delivery_receipts=$expectedReceipts`$")) {
               throw 'task-completion test was not delivered'
             }
             $firstHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installed).Hash
@@ -106,7 +108,8 @@ jobs:
             Start-Sleep -Milliseconds 750
             & $upgrade status |
               Set-Content target\lifecycle-evidence\windows-status-after-upgrade.txt
-            if (-not (Select-String -Quiet -Path target\lifecycle-evidence\windows-status-after-upgrade.txt -Pattern '^delivery_receipts=2$')) {
+            $expectedReceipts = if ($nativeReady) { 2 } else { 0 }
+            if (-not (Select-String -Quiet -Path target\lifecycle-evidence\windows-status-after-upgrade.txt -Pattern "^delivery_receipts=$expectedReceipts`$")) {
               throw 'queue/receipt state did not survive upgrade and restart'
             }
 
@@ -131,10 +134,10 @@ jobs:
             }
             @(
               'install=true'
-              'task_delivery=true'
+              "native_delivery=$nativeReady"
               'idempotent_upgrade=true'
               'startup_restart=true'
-              'approval_delivery_after_upgrade=true'
+              'approval_submission_after_upgrade=true'
               'uninstall=true'
               'state_preserved=true'
               'hooks_preserved=true'
@@ -232,7 +235,7 @@ jobs:
           openssl req -new -newkey rsa:2048 -nodes -sha256 -config "$directory/leaf.cnf" -keyout "$directory/leaf.key" -out "$directory/leaf.csr"
           openssl x509 -req -sha256 -days 1 -in "$directory/leaf.csr" -CA "$directory/root.pem" -CAkey "$directory/root.key" -CAcreateserial -extfile "$directory/leaf.cnf" -extensions extensions -out "$directory/leaf.pem"
           pkcs12_options=()
-          if openssl pkcs12 -help 2>&1 | grep -q -- '-legacy'; then
+          if [[ "$(openssl version)" == "OpenSSL 3."* ]]; then
             pkcs12_options=(-legacy)
           fi
           openssl pkcs12 -export "${pkcs12_options[@]}" -inkey "$directory/leaf.key" -in "$directory/leaf.pem" -certfile "$directory/root.pem" -out "$directory/leaf.p12" -passout "pass:$password"
@@ -303,6 +306,12 @@ jobs:
           settings_app_pressed=''
           settings_allow_pressed=''
           screen_pressed=''
+          for attempt in $(seq 1 100); do
+            [[ -e "$HOME/Library/Application Support/codex-notifier/state/install-manifest.json" ]] && break
+            sleep 0.1
+          done
+          open 'x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=io.github.leopardrich.codex-notifier' || true
+          banner_pressed=1
           for attempt in $(seq 1 100); do
             if "$source_executable" status 2>/dev/null | grep -q '^notification=ready$'; then break; fi
             CODEX_LIFECYCLE_CLICK_HELPER="$PWD/target/macos-lifecycle-click" \

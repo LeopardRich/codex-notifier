@@ -204,7 +204,7 @@ async fn stale_owned_socket_recovers_but_unrelated_file_is_preserved() {
             Err(IpcError::AlreadyRunning) if std::time::Instant::now() < deadline => {
                 std::thread::sleep(StdDuration::from_millis(10));
             }
-            result => panic!("recover stale: {result:?}"),
+            Err(error) => panic!("recover stale: {error:?}"),
         }
     };
     drop(server);
