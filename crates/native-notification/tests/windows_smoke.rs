@@ -13,6 +13,7 @@ use codex_notifier_native_notification::{
     NotificationStatus, WindowsApplicationId, WindowsNotificationBackend,
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use windows::{UI::Notifications::ToastNotificationManager, core::HSTRING};
 
 fn event(kind: EventKind, id: &str, title: &str, body: &str, urgency: Urgency) -> CanonicalEvent {
     let occurred_at =
@@ -101,4 +102,25 @@ fn reports_real_non_interactive_session() {
         NotificationStatus::NoInteractiveSession,
         "Windows notification diagnostic: {diagnostic:?}"
     );
+}
+
+#[test]
+#[ignore = "reports the raw product WinRT notifier state for platform diagnosis"]
+fn reports_raw_product_notifier_state() {
+    let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(
+        codex_notifier_native_notification::CODEX_NOTIFIER_APP_ID,
+    ))
+    .unwrap_or_else(|error| {
+        panic!(
+            "CreateToastNotifierWithId failed: hresult=0x{:08X} error={error}",
+            error.code().0
+        )
+    });
+    let setting = notifier.Setting().unwrap_or_else(|error| {
+        panic!(
+            "ToastNotifier.Setting failed: hresult=0x{:08X} error={error}",
+            error.code().0
+        )
+    });
+    println!("ToastNotifier.Setting={setting:?}");
 }

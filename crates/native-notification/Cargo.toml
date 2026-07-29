@@ -34,8 +34,10 @@ usernotifications-rs.workspace = true
 time.workspace = true
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
+block2.workspace = true
 objc2.workspace = true
 objc2-app-kit.workspace = true
+objc2-user-notifications.workspace = true
 tempfile.workspace = true
 
 [lints]

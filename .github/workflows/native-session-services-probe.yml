@@ -209,6 +209,14 @@ jobs:
               $exitCode = $directCode
             }
 
+            $rawOutput = & $installedBinary `
+              --exact reports_raw_product_notifier_state `
+              --ignored `
+              --nocapture 2>&1
+            $rawCode = $LASTEXITCODE
+            $rawOutput | Add-Content target\windows11-smoke.log
+            "RawStateExitCode=$rawCode" | Add-Content target\windows11-smoke.log
+
             Start-Sleep -Milliseconds 500
             Add-Type -AssemblyName System.Windows.Forms
             $screen = [System.Windows.Forms.SystemInformation]::VirtualScreen
@@ -322,6 +330,42 @@ jobs:
             launchctl print "gui/$uid" | grep -i -C 2 notification
           } >>target/macos-session-services.txt 2>&1
 
+      - name: Prepare screen-capture evidence
+        shell: bash
+        run: |
+          set +e
+          screencapture -x target/macos-screen-preflight.png \
+            2>target/macos-screen-preflight-error.txt
+          for attempt in $(seq 1 40); do
+            osascript >target/macos-screen-permission.txt 2>&1 <<'APPLESCRIPT'
+          tell application "System Events"
+              try
+                  tell process "UserNotificationCenter"
+                      repeat with candidateWindow in windows
+                          set candidateElements to entire contents of candidateWindow
+                          repeat with candidateElement in candidateElements
+                              try
+                                  if role of candidateElement is "AXButton" and name of candidateElement is "Allow" then
+                                      click candidateElement
+                                      return "clicked screen-capture Allow"
+                                  end if
+                              end try
+                          end repeat
+                      end repeat
+                  end tell
+              end try
+              return "screen-capture Allow not found"
+          end tell
+          APPLESCRIPT
+            if grep -q '^clicked ' target/macos-screen-permission.txt; then
+              break
+            fi
+            sleep 0.25
+          done
+          sleep 2
+          screencapture -x target/macos-screen-ready.png \
+            2>target/macos-screen-ready-error.txt
+
       - name: Build macOS smoke executable
         run: cargo test -p codex-notifier-native-notification --test macos_smoke --no-run
 
@@ -347,24 +391,37 @@ jobs:
             CODEX_PROBE_SCREENSHOT="$PWD/target/macos-permission-prompt.png" \
               osascript >target/macos-ui-current.txt 2>&1 <<'APPLESCRIPT'
           tell application "System Events"
-              repeat with candidateProcess in every application process
-                  try
-                      repeat with candidateWindow in windows of candidateProcess
+              try
+                  tell process "UserNotificationCenter"
+                      repeat with candidateWindow in windows
                           set candidateElements to entire contents of candidateWindow
+                          set windowText to ""
                           repeat with candidateElement in candidateElements
                               try
-                                  if role of candidateElement is "AXButton" and name of candidateElement is "Allow" then
-                                      set screenshotPath to system attribute "CODEX_PROBE_SCREENSHOT"
-                                      do shell script "/usr/sbin/screencapture -x " & quoted form of screenshotPath
-                                      click candidateElement
-                                      return "clicked=" & name of candidateProcess
-                                  end if
+                                  set windowText to windowText & " " & (name of candidateElement as text)
+                              end try
+                              try
+                                  set windowText to windowText & " " & (value of candidateElement as text)
                               end try
                           end repeat
+                          if windowText contains "Codex Notifier" and windowText contains "Notifications" then
+                              repeat with candidateElement in candidateElements
+                                  try
+                                      if role of candidateElement is "AXButton" and name of candidateElement is "Allow" then
+                                          set screenshotPath to system attribute "CODEX_PROBE_SCREENSHOT"
+                                          do shell script "/usr/sbin/screencapture -x " & quoted form of screenshotPath
+                                          click candidateElement
+                                          return "clicked=notification text=" & windowText
+                                      end if
+                                  end try
+                              end repeat
+                          end if
                       end repeat
-                  end try
-              end repeat
-              return "Allow button not found"
+                      return "notification Allow not found"
+                  end tell
+              on error errorMessage
+                  return "notification UI unavailable: " & errorMessage
+              end try
           end tell
           APPLESCRIPT
             cat target/macos-ui-current.txt >target/macos-ui.txt
