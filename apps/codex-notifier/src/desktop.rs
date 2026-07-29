@@ -12,7 +12,7 @@ use codex_notifier_config::{
 use codex_notifier_core::{
     CanonicalEvent, EventId, EventKind, EventSource, Extensions, Presentation, Privacy, Urgency,
 };
-use codex_notifier_ipc::{AckStatus, IpcClient, IpcEndpoint, IpcError, IpcPolicy};
+use codex_notifier_ipc::{AckStatus, Acknowledgement, IpcClient, IpcEndpoint, IpcError, IpcPolicy};
 use codex_notifier_native_notification::{
     NativeNotificationAdapter, NotificationContentPolicy, NotificationDiagnostic,
     NotificationPolicy,
@@ -169,6 +169,25 @@ pub async fn submit_local_test(kind: EventKind) -> Result<(EventId, AckStatus), 
         .submit(&event)
         .await?;
     Ok((event_id, acknowledgement.status()))
+}
+
+/// Submits one already validated remote event to the configured local agent.
+///
+/// The event cannot select an endpoint: configuration alone determines the
+/// per-user IPC destination. Agent rejections are returned unchanged so the
+/// remote relay receives the same structured acknowledgement as a local
+/// producer.
+///
+/// # Errors
+///
+/// Returns a stable configuration, endpoint, or local IPC failure.
+pub async fn submit_remote_event(event: &CanonicalEvent) -> Result<Acknowledgement, DesktopError> {
+    let (_, config) = load_current_config()?;
+    let endpoint = endpoint_for(&config)?;
+    IpcClient::new(endpoint, IpcPolicy::default())
+        .submit(event)
+        .await
+        .map_err(DesktopError::from)
 }
 
 /// Returns the current native notification diagnostic.

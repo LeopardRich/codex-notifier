@@ -340,6 +340,9 @@ macOS 14.8.7 与 macOS 26.4 的真实托管 runner 检查已执行首次授权�
 - 常规日志对事件载荷脱敏，SSH 私钥绝不能放入项目配置。
 - 首版通知仅用于展示，不提供直接批准 Codex 操作的按钮。
 
+经审计的密钥限制、主机密钥登记流程、权限要求、诊断状态与撤销步骤见
+[`docs/restricted-ssh.md`](docs/restricted-ssh.md)。
+
 ## 配置模型
 
 配置按以下优先级叠加：内置默认值、用户配置、指定配置档以及显式 CLI 覆盖项。
@@ -378,18 +381,19 @@ Windows 上的用户配置与状态遵循 `%APPDATA%` 和 `%LOCALAPPDATA%`，mac
 
 ## 命令界面
 
-本地桌面端生命周期、两类低级 Codex 事件入口和 Codex 能力检查已经实现；远程与
-更完整的诊断命令仍保留规划职责：
+本地桌面端生命周期、两类低级 Codex 事件入口、受限 SSH 接收端以及聚焦的能力/
+安全检查已经实现；中继发送与更完整的诊断命令仍保留规划职责：
 
 | 命令 | 可用性 | 用途 |
 | --- | --- | --- |
 | `emit task-completed` | 已实现 | 面向 Codex、接收已验证 `Stop` 载荷的有界本地事件入口。 |
 | `emit approval-requested` | 已实现 | 接收已验证 app-server 命令审批请求的有界本地事件入口。 |
 | `doctor codex` | 已实现 | 只读报告版本/界面能力与安装选择。 |
+| `doctor ssh` | 已实现 | 只读报告主机密钥登记与授权文件权限。 |
 | `agent` | 桌面端已实现 | 运行已配置的用户级桌面端进程。 |
-| `receive` | 规划中 | 桌面端面向受限 SSH 的事件入口。 |
+| `receive` | 已实现 | 从受限 SSH 会话接收一个有界规范事件，并通过本地 IPC 转交。 |
 | `install` / `uninstall` | 桌面端已实现 | 可逆地管理已验证 Codex hook 与 Windows/macOS 用户级自启动产物。 |
-| 其他 `doctor` 检查 | 规划中 | 报告 agent、IPC、存储、SSH 与通知状态。 |
+| 其他 `doctor` 检查 | 规划中 | 报告更完整的 agent、IPC、存储与通知状态。 |
 | `test` | 桌面端已实现 | 通过本地 IPC 提交显式模拟的任务完成或审批请求事件。 |
 | `status` | 桌面端已实现 | 显示安装、agent、队列、投递与原生通知状态，不展示事件正文。 |
 
@@ -423,6 +427,31 @@ SQLite 队列、投递记录和系统通知历史始终保留。Windows 上应�
 平台所有权细节见 [`packaging/windows/README.md`](packaging/windows/README.md)
 与 [`packaging/macos/README.md`](packaging/macos/README.md)，执行证据见
 [`docs/verification/stage-14.md`](docs/verification/stage-14.md)。
+
+### 受限 SSH 接收
+
+阶段 15 增加桌面端信任边界：
+
+```text
+codex-notifier receive
+codex-notifier doctor ssh [--known-hosts <绝对路径>] [--authorized-keys <绝对路径>]
+```
+
+`receive` 不是通用本地输入命令。它要求 OpenSSH 提供的
+`SSH_ORIGINAL_COMMAND` 精确等于 `codex-notifier receive`，要求存在 SSH
+连接标记，拒绝任何 PTY 标记，并且不接受 CLI 参数。命令最多读取 16,384 字节，
+且只解析一个规范协议 v1 JSON 对象。合法事件通过与本地生产者相同的用户级 IPC
+提交给已配置桌面 agent；agent 的有界确认是 stdout 上唯一的对象。
+
+会话、输入、配置与 IPC 故障都会转换为固定的结构化拒绝，不包含原始命令、事件
+正文、主机别名、路径、密钥或堆栈。无法信任事件 ID 的非法输入会获得一个新生成的
+UUIDv7 响应关联 ID。合法展示字段中的 Shell 元字符始终只是 JSON/通知数据，不能
+选择可执行文件、参数、端点、路径、URL 或动作。
+
+系统 OpenSSH 服务端与专用 Ed25519 密钥必须单独配置。Forced-key/中继配置模板、
+强制主机密钥校验、Windows/macOS 权限规则、诊断状态含义与可逆移除步骤见
+[`docs/restricted-ssh.md`](docs/restricted-ssh.md)。本项目不会自动修改用户的 SSH
+配置或密钥文件。
 
 ### Codex 事件 emit
 
@@ -487,7 +516,8 @@ codex-notifier/
 |-- packaging/
 |   |-- windows/              # 安装包和用户自启动资源
 |   |-- macos/                # 应用包、签名与 LaunchAgent 资源
-|   `-- linux-relay/          # systemd 用户服务资源
+|   |-- linux-relay/          # systemd 用户服务资源
+|   `-- ssh/                  # 受限密钥与中继 SSH 配置模板
 `-- docs/
     |-- decisions/            # 架构决策记录
     |-- event-protocol-v1.md  # 已冻结的规范事件与确认契约
@@ -532,7 +562,8 @@ CI 在 Windows、macOS 和 Linux relay runner 上执行相同质量门禁。
 
 - 单元测试覆盖校验、脱敏、路由、重试和去重。
 - 契约测试固定规范事件与确认协议的兼容性。
-- 集成测试覆盖真实本地 IPC、SQLite 和模拟 OpenSSH 进程。
+- 集成测试覆盖真实本地 IPC、SQLite、receive 可执行边界和临时受限系统 OpenSSH
+  服务端。
 - 适配器测试按 Codex 版本使用脱敏后的真实载荷样本。
 - Windows 与 macOS CI 分别编译并测试各自的原生通知适配器。
 - 发布前在两个桌面平台手工验证真实通知与系统权限。

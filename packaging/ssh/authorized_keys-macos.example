@@ -1,0 +1,1 @@
+restrict,command="\"/Users/USERNAME/Applications/Codex Notifier.app/Contents/MacOS/codex-notifier\" receive" ssh-ed25519 DEDICATED_PUBLIC_KEY codex-notifier-relay

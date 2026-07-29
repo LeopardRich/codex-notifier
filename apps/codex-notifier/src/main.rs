@@ -4,7 +4,9 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
 
-use codex_notifier::desktop::{DesktopError, run_agent, submit_local_test};
+use codex_notifier::desktop::{
+    DesktopError, load_current_config, run_agent, submit_local_test, submit_remote_event,
+};
 use codex_notifier::installer::{InstallerError, install, status, uninstall};
 use codex_notifier::lifecycle::RemovalDisposition;
 use codex_notifier::{ApprovalRequestedEmitter, EmitError, TaskCompletedEmitter};
@@ -14,10 +16,16 @@ use codex_notifier_codex_source::{
 };
 use codex_notifier_core::EventKind;
 use codex_notifier_ipc::{IpcEndpoint, IpcPolicy};
+use codex_notifier_ssh_transport::{
+    ReceiveError, diagnose_authorized_keys, diagnose_host_key, ipc_rejection,
+    rejection_acknowledgement, safe_rejection, validate_receive_session, write_acknowledgement,
+};
+use time::OffsetDateTime;
 
 const ARGUMENT_ERROR: &str = "command_arguments_invalid";
 const STDIN_ERROR: &str = "command_stdin_failed";
 const CODEX_VERSION_ERROR: &str = "install_codex_version_unavailable";
+const SSH_PATH_ERROR: &str = "ssh_paths_unavailable";
 
 #[derive(Clone, Copy)]
 enum EmitSource {
@@ -44,14 +52,25 @@ struct EmitCommand {
     routing_profile: Option<String>,
 }
 
-struct DoctorCommand {
+struct CodexDoctorCommand {
     codex_version: String,
     interface: CodexInterface,
+}
+
+enum DoctorCommand {
+    Codex(CodexDoctorCommand),
+    Ssh(SshDoctorCommand),
+}
+
+struct SshDoctorCommand {
+    known_hosts: Option<PathBuf>,
+    authorized_keys: Option<PathBuf>,
 }
 
 enum Command {
     Emit(EmitCommand),
     Doctor(DoctorCommand),
+    Receive,
     Agent,
     Install { codex_version: Option<String> },
     Uninstall,
@@ -62,10 +81,12 @@ enum Command {
 enum CommandError {
     Arguments,
     Stdin,
+    SshPaths,
     CodexVersion,
     Emit(EmitError),
     Desktop(DesktopError),
     Installer(InstallerError),
+    Receive(ReceiveError),
 }
 
 impl CommandError {
@@ -73,18 +94,20 @@ impl CommandError {
         match self {
             Self::Arguments => ARGUMENT_ERROR,
             Self::Stdin => STDIN_ERROR,
+            Self::SshPaths => SSH_PATH_ERROR,
             Self::CodexVersion => CODEX_VERSION_ERROR,
             Self::Emit(error) => error.code(),
             Self::Desktop(error) => error.code(),
             Self::Installer(error) => error.code(),
+            Self::Receive(error) => error.code(),
         }
     }
 
     const fn exit_code(&self) -> i32 {
         match self {
-            Self::Arguments | Self::Stdin | Self::CodexVersion => 2,
+            Self::Arguments | Self::Stdin | Self::SshPaths | Self::CodexVersion => 2,
             Self::Emit(EmitError::Source(_)) => 3,
-            Self::Emit(_) | Self::Desktop(_) | Self::Installer(_) => 4,
+            Self::Emit(_) | Self::Desktop(_) | Self::Installer(_) | Self::Receive(_) => 4,
         }
     }
 }
@@ -100,10 +123,12 @@ async fn main() {
 async fn run() -> Result<(), CommandError> {
     match parse_command(std::env::args().skip(1))? {
         Command::Emit(command) => run_emit(command).await,
-        Command::Doctor(command) => {
-            run_doctor(&command);
+        Command::Doctor(DoctorCommand::Codex(command)) => {
+            run_codex_doctor(&command);
             Ok(())
         }
+        Command::Doctor(DoctorCommand::Ssh(command)) => run_ssh_doctor(&command),
+        Command::Receive => run_receive().await,
         Command::Agent => run_agent().await.map_err(CommandError::Desktop),
         Command::Install { codex_version } => {
             let codex_version = codex_version.map_or_else(detect_codex_version, Ok)?;
@@ -168,6 +193,39 @@ async fn run() -> Result<(), CommandError> {
     }
 }
 
+async fn run_receive() -> Result<(), CommandError> {
+    let session = validate_receive_session(
+        std::env::var_os("SSH_ORIGINAL_COMMAND").as_deref(),
+        std::env::var_os("SSH_CONNECTION").as_deref(),
+        std::env::var_os("SSH_TTY").as_deref(),
+    );
+    let acknowledgement = if let Err(error) = session {
+        rejection_acknowledgement(None, &error).map_err(CommandError::Receive)?
+    } else {
+        let stdin = std::io::stdin();
+        match codex_notifier_ssh_transport::read_event(&mut stdin.lock(), OffsetDateTime::now_utc())
+        {
+            Err(error) => rejection_acknowledgement(None, &error).map_err(CommandError::Receive)?,
+            Ok(event) => match submit_remote_event(&event).await {
+                Ok(acknowledgement) => acknowledgement,
+                Err(DesktopError::Ipc(error)) => {
+                    ipc_rejection(event.event_id(), &error).map_err(CommandError::Receive)?
+                }
+                Err(error) => safe_rejection(
+                    event.event_id(),
+                    error.code(),
+                    false,
+                    "Desktop agent submission failed",
+                )
+                .map_err(CommandError::Receive)?,
+            },
+        }
+    };
+
+    write_acknowledgement(&mut std::io::stdout().lock(), &acknowledgement)
+        .map_err(CommandError::Receive)
+}
+
 async fn run_emit(command: EmitCommand) -> Result<(), CommandError> {
     let endpoint = IpcEndpoint::new(command.state_dir.join("run"), command.ipc_profile)
         .map_err(EmitError::from)
@@ -209,7 +267,7 @@ async fn run_emit(command: EmitCommand) -> Result<(), CommandError> {
     Ok(())
 }
 
-fn run_doctor(command: &DoctorCommand) {
+fn run_codex_doctor(command: &CodexDoctorCommand) {
     let report = CodexCapabilityReport::inspect(&command.codex_version, command.interface);
     let version = report
         .version()
@@ -224,10 +282,46 @@ fn run_doctor(command: &DoctorCommand) {
     );
 }
 
+fn run_ssh_doctor(command: &SshDoctorCommand) -> Result<(), CommandError> {
+    let (_, config) = load_current_config().map_err(CommandError::Desktop)?;
+    let ssh_directory = ssh_directory()?;
+    let default_known_hosts = ssh_directory.join("known_hosts");
+    let default_authorized_keys = ssh_directory.join("authorized_keys");
+    let known_hosts = command
+        .known_hosts
+        .as_deref()
+        .unwrap_or(&default_known_hosts);
+    let authorized_keys = command
+        .authorized_keys
+        .as_deref()
+        .unwrap_or(&default_authorized_keys);
+    let host_key = diagnose_host_key(config.relay().ssh_host_alias(), known_hosts);
+    let authorized_keys = diagnose_authorized_keys(authorized_keys);
+    println!(
+        "host_key={}\nauthorized_keys={}",
+        host_key.as_str(),
+        authorized_keys.as_str()
+    );
+    Ok(())
+}
+
+fn ssh_directory() -> Result<PathBuf, CommandError> {
+    #[cfg(windows)]
+    let home = std::env::var_os("USERPROFILE");
+    #[cfg(not(windows))]
+    let home = std::env::var_os("HOME");
+    let home = home.map(PathBuf::from).ok_or(CommandError::SshPaths)?;
+    if !home.is_absolute() {
+        return Err(CommandError::SshPaths);
+    }
+    Ok(home.join(".ssh"))
+}
+
 fn parse_command(mut arguments: impl Iterator<Item = String>) -> Result<Command, CommandError> {
     match arguments.next().as_deref() {
         Some("emit") => parse_emit(arguments).map(Command::Emit),
         Some("doctor") => parse_doctor(arguments).map(Command::Doctor),
+        Some("receive") if arguments.next().is_none() => Ok(Command::Receive),
         Some("agent") if arguments.next().is_none() => Ok(Command::Agent),
         Some("install") => parse_install(arguments),
         Some("uninstall") if arguments.next().is_none() => Ok(Command::Uninstall),
@@ -303,8 +397,10 @@ fn parse_emit(mut arguments: impl Iterator<Item = String>) -> Result<EmitCommand
 fn parse_doctor(
     mut arguments: impl Iterator<Item = String>,
 ) -> Result<DoctorCommand, CommandError> {
-    if arguments.next().as_deref() != Some("codex") {
-        return Err(CommandError::Arguments);
+    match arguments.next().as_deref() {
+        Some("ssh") => return parse_ssh_doctor(arguments),
+        Some("codex") => {}
+        _ => return Err(CommandError::Arguments),
     }
     let mut codex_version = None;
     let mut interface = None;
@@ -324,10 +420,32 @@ fn parse_doctor(
         Some("app-server") => CodexInterface::AppServer,
         _ => return Err(CommandError::Arguments),
     };
-    Ok(DoctorCommand {
+    Ok(DoctorCommand::Codex(CodexDoctorCommand {
         codex_version: codex_version.ok_or(CommandError::Arguments)?,
         interface,
-    })
+    }))
+}
+
+fn parse_ssh_doctor(
+    mut arguments: impl Iterator<Item = String>,
+) -> Result<DoctorCommand, CommandError> {
+    let mut known_hosts = None;
+    let mut authorized_keys = None;
+    while let Some(flag) = arguments.next() {
+        let value = PathBuf::from(arguments.next().ok_or(CommandError::Arguments)?);
+        let target = match flag.as_str() {
+            "--known-hosts" => &mut known_hosts,
+            "--authorized-keys" => &mut authorized_keys,
+            _ => return Err(CommandError::Arguments),
+        };
+        if !value.is_absolute() || target.replace(value).is_some() {
+            return Err(CommandError::Arguments);
+        }
+    }
+    Ok(DoctorCommand::Ssh(SshDoctorCommand {
+        known_hosts,
+        authorized_keys,
+    }))
 }
 
 fn read_stdin(maximum: usize) -> Result<Vec<u8>, CommandError> {
@@ -390,7 +508,7 @@ mod tests {
     }
 
     #[test]
-    fn stage_14_commands_reject_trailing_and_duplicate_arguments() {
+    fn stage_15_commands_reject_trailing_and_duplicate_arguments() {
         assert!(matches!(
             parse_command(arguments(&["agent"])),
             Ok(Command::Agent)
@@ -415,6 +533,31 @@ mod tests {
         ));
         assert!(matches!(
             parse_command(arguments(&["uninstall", "extra"])),
+            Err(CommandError::Arguments)
+        ));
+        assert!(matches!(
+            parse_command(arguments(&["receive"])),
+            Ok(Command::Receive)
+        ));
+        assert!(matches!(
+            parse_command(arguments(&["receive", "extra"])),
+            Err(CommandError::Arguments)
+        ));
+        assert!(matches!(
+            parse_command(arguments(&["doctor", "ssh"])),
+            Ok(Command::Doctor(DoctorCommand::Ssh(_)))
+        ));
+        assert!(matches!(
+            parse_command(arguments(&["doctor", "ssh", "extra"])),
+            Err(CommandError::Arguments)
+        ));
+        assert!(matches!(
+            parse_command(arguments(&[
+                "doctor",
+                "ssh",
+                "--authorized-keys",
+                "relative"
+            ])),
             Err(CommandError::Arguments)
         ));
     }

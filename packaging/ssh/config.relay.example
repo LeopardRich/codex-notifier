@@ -1,0 +1,11 @@
+Host codex-notifier-desktop
+    HostName DESKTOP_HOST_OR_VPN_ADDRESS
+    Port 22
+    User DESKTOP_USER
+    IdentityFile ~/.ssh/codex-notifier-desktop
+    IdentitiesOnly yes
+    StrictHostKeyChecking yes
+    UserKnownHostsFile ~/.ssh/known_hosts
+    RequestTTY no
+    ForwardAgent no
+    ClearAllForwardings yes

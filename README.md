@@ -400,6 +400,10 @@ The trust boundary is the desktop `receive` command.
 - Notifications are display-only in the first release and have no action button
   that can approve a Codex operation.
 
+The audited key restrictions, host-key enrollment procedure, permission
+requirements, diagnostics, and revocation steps are in
+[`docs/restricted-ssh.md`](docs/restricted-ssh.md).
+
 ## Configuration Model
 
 Configuration is layered in this order: built-in defaults, user configuration,
@@ -446,19 +450,20 @@ output.
 
 ## Command Surface
 
-The local desktop lifecycle, two low-level Codex ingestion entries, and Codex
-capability check are implemented. Remote and broader diagnostic commands retain
-their planned responsibilities:
+The local desktop lifecycle, two low-level Codex ingestion entries, restricted
+SSH receiver, and focused capability/security checks are implemented. Relay
+sending and broader diagnostics retain their planned responsibilities:
 
 | Command | Availability | Purpose |
 | --- | --- | --- |
 | `emit task-completed` | Implemented | Codex-facing, bounded local ingestion for the verified `Stop` payload. |
 | `emit approval-requested` | Implemented | Bounded local ingestion for a verified app-server command-approval request. |
 | `doctor codex` | Implemented | Read-only version/interface capability and installation reporting. |
+| `doctor ssh` | Implemented | Read-only host-key enrollment and authorized-file permission reporting. |
 | `agent` | Implemented for desktop | Run the configured per-user desktop process. |
-| `receive` | Planned | Restricted SSH-facing ingestion on the desktop. |
+| `receive` | Implemented | Accept exactly one bounded canonical event from a restricted SSH session and forward it over local IPC. |
 | `install` / `uninstall` | Implemented for desktop | Reversibly manage the verified Codex hook and per-user Windows/macOS startup artifacts. |
-| Other `doctor` checks | Planned | Report agent, IPC, storage, SSH, and notification status. |
+| Other `doctor` checks | Planned | Report broader agent, IPC, storage, and notification status. |
 | `test` | Implemented for desktop | Submit an explicit synthetic task-completion or approval-request event over local IPC. |
 | `status` | Implemented for desktop | Show installation, agent, queue, delivery, and native-notification status without event content. |
 
@@ -498,6 +503,37 @@ See the platform-specific ownership details in
 [`packaging/windows/README.md`](packaging/windows/README.md) and
 [`packaging/macos/README.md`](packaging/macos/README.md), and the executed
 evidence in [`docs/verification/stage-14.md`](docs/verification/stage-14.md).
+
+### Restricted SSH receive
+
+Stage 15 adds the desktop-side trust boundary:
+
+```text
+codex-notifier receive
+codex-notifier doctor ssh [--known-hosts <absolute-path>] [--authorized-keys <absolute-path>]
+```
+
+`receive` is not a general local ingestion command. It requires OpenSSH's
+`SSH_ORIGINAL_COMMAND` to equal `codex-notifier receive`, requires an SSH
+connection marker, rejects any PTY marker, and accepts no CLI argument. It
+reads at most 16,384 bytes and parses exactly one canonical protocol-v1 JSON
+object. A valid event is submitted to the configured desktop agent through the
+same per-user IPC used by local producers; its bounded agent acknowledgement is
+written as the only stdout object.
+
+Session, input, configuration, and IPC failures become fixed structured
+rejections. They never include the original command, event text, host alias,
+path, key, or stack trace. Invalid input that has no trustworthy event ID gets
+a fresh UUIDv7 response correlation ID. Shell metacharacters in valid display
+fields remain JSON/notification data and cannot select an executable,
+argument, endpoint, path, URL, or action.
+
+The system OpenSSH server and a dedicated Ed25519 key must be configured
+separately. Forced-key and relay config templates, mandatory host-key
+verification, Windows/macOS permission rules, diagnostic meanings, and
+reversible removal are documented in
+[`docs/restricted-ssh.md`](docs/restricted-ssh.md). The project never changes a
+user's SSH configuration or key files automatically.
 
 ### Codex event emit
 
@@ -568,7 +604,8 @@ codex-notifier/
 |-- packaging/
 |   |-- windows/              # Packaging and per-user startup assets
 |   |-- macos/                # Bundle, signing, and LaunchAgent assets
-|   `-- linux-relay/          # systemd user service assets
+|   |-- linux-relay/          # systemd user service assets
+|   `-- ssh/                  # Restricted-key and relay SSH config templates
 `-- docs/
     |-- decisions/            # Architecture decision records
     |-- event-protocol-v1.md  # Frozen canonical event and acknowledgement contract
@@ -619,7 +656,8 @@ CI runs the same quality gates on Windows, macOS, and a Linux relay runner.
 
 - Unit tests cover validation, redaction, routing, retries, and deduplication.
 - Contract tests freeze canonical event and acknowledgement compatibility.
-- Integration tests exercise real local IPC, SQLite, and a fake OpenSSH process.
+- Integration tests exercise real local IPC, SQLite, the receive executable,
+  and a temporary restricted system OpenSSH server.
 - Adapter tests use captured, sanitized Codex payload fixtures by version.
 - Windows and macOS CI compile and test their native adapters.
 - Manual release smoke tests verify real notifications and OS permissions on

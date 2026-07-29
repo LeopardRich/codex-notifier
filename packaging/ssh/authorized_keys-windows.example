@@ -1,0 +1,1 @@
+restrict,command="\"C:/Users/USERNAME/AppData/Local/Programs/Codex Notifier/codex-notifier.exe\" receive" ssh-ed25519 DEDICATED_PUBLIC_KEY codex-notifier-relay

@@ -71,6 +71,7 @@ dependencies = [
  "codex-notifier-ipc",
  "codex-notifier-native-notification",
  "codex-notifier-persistence",
+ "codex-notifier-ssh-transport",
  "serde",
  "serde_json",
  "sha2",
@@ -179,6 +180,15 @@ dependencies = [
 [[package]]
 name = "codex-notifier-ssh-transport"
 version = "0.1.0"
+dependencies = [
+ "codex-notifier-core",
+ "codex-notifier-ipc",
+ "rustix",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "time",
+]
 
 [[package]]
 name = "cpufeatures"

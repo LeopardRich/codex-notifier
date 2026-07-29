@@ -8,5 +8,18 @@ license.workspace = true
 [lib]
 path = "src/lib.rs"
 
+[dependencies]
+codex-notifier-core = { path = "../core" }
+codex-notifier-ipc = { path = "../ipc" }
+serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true

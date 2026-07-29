@@ -17,6 +17,7 @@ codex-notifier-codex-source = { path = "../../crates/codex-source" }
 codex-notifier-ipc = { path = "../../crates/ipc" }
 codex-notifier-native-notification = { path = "../../crates/native-notification" }
 codex-notifier-persistence = { path = "../../crates/persistence" }
+codex-notifier-ssh-transport = { path = "../../crates/ssh-transport" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
