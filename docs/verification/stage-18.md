@@ -1,6 +1,6 @@
 # Stage 18 Verification
 
-Status: In verification
+Status: Complete
 
 Date: 2026-07-30
 
@@ -83,10 +83,31 @@ The normative evidence levels and four-path matrix are in
   API; the budget ends when the native or recording adapter accepts the event
   and SQLite commits its receipt.
 
-## Pending merge gates
+## Branch CI
 
-- Green implementation-branch CI on Windows, macOS 14, current macOS, and Linux
-  relay with the expanded real OpenSSH harness.
-- Fast-forward merge followed by green permanent `main` CI.
+- Implementation-branch run
+  [`30496487746`](https://github.com/LeopardRich/codex-notifier/actions/runs/30496487746)
+  passed on commit `7ba28ff`: formatting, strict Clippy, and the complete normal
+  suite were green on Windows, macOS 14, current macOS, and Ubuntu 22.04.
+- The Windows job also passed the real Session 0 diagnostic. Both macOS jobs
+  built the native smoke target and passed the signed no-Aqua diagnostic.
+- The Ubuntu job installed the real OpenSSH server and passed the forced-command
+  boundary, empty receiver probe, offline retry/recovery, remote self-test,
+  duplicate acknowledgement, and both task-completion and approval-request
+  desktop deliveries.
+- The `actions/checkout@v4` Node.js 20 deprecation notice is a non-blocking
+  upstream action warning; all project checks completed successfully.
 
-Stage 19 must not begin until all pending merge gates are complete.
+## Completion decision
+
+- The available Windows and macOS local evidence, cross-platform reliability
+  contracts, and real Linux OpenSSH harness satisfy the Stage 18 implementation
+  scope without adding Linux desktop support or overstating unavailable remote
+  platform runs.
+- Crash recovery prefers no loss in the pre-acknowledgement window, stable-ID
+  retries after a committed receipt invoke the final adapter only once, and
+  capacity, compatibility, latency, memory, storage, retry, and worker bounds
+  all have blocking tests.
+- Stage 18 is permanently closed only after the evidence commit is green on the
+  implementation branch, fast-forwarded to `main`, and permanent `main` CI is
+  green. Stage 19 must not begin before that gate.
