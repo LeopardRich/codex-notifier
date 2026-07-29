@@ -6,7 +6,7 @@
 It turns Codex events that need human attention into native Windows or macOS
 notifications, including events produced by Codex running on a remote server.
 
-> Status: Stages 01-16 are complete: compatibility evidence, architecture
+> Status: Stages 01-17 are implemented and platform-verified: compatibility evidence, architecture
 > decisions, the Rust workspace, three-platform quality gates, and the
 > canonical event domain model, layered configuration, and cross-platform path
 > rules are established, together with structured redacted logging and the
@@ -34,10 +34,10 @@ notifications, including events produced by Codex running on a remote server.
 > trust failures, and schedules jittered exponential retries with bounded
 > dead letters. The same Linux harness verifies offline queueing, automatic
 > recovery, at-least-once resend, and desktop deduplication. Windows/macOS
-> SSH-server setup remains explicitly unverified. Stage 17 read-only doctor,
+> SSH-server setup remains explicitly unverified. The Stage 17 read-only doctor,
 > role-aware status, matching human/JSON output, stable health exit codes, and
-> delivery-aware local/remote self-tests are implemented and under final
-> cross-platform verification.
+> delivery-aware local/remote self-tests pass the Windows, macOS 14, current
+> macOS, and Linux relay gates.
 
 The implementation sequence and acceptance gates are defined in
 [`stages.md`](stages.md).

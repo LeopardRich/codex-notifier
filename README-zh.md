@@ -6,7 +6,7 @@
 Codex 事件转换为 Windows 或 macOS 原生系统通知，并支持 Codex 运行在远程
 服务器上的场景。
 
-> 当前状态：阶段 01-16 已完成，兼容性证据、架构决策、Rust workspace、三平台
+> 当前状态：阶段 01-17 已实现并通过平台验证，兼容性证据、架构决策、Rust workspace、三平台
 > 质量门禁、规范事件领域模型、分层配置、跨平台路径规则与结构化脱敏日志模型均已
 > 建立，事务性 SQLite 发件箱/去重存储、有界的用户级本地 IPC、角色感知 agent
 > 生命周期、持久背压和有界 worker 排空也已完成；Codex CLI 0.144.5 的 CLI
@@ -25,7 +25,7 @@ Codex 事件转换为 Windows 或 macOS 原生系统通知，并支持 Codex 运
 > 有界死信完成重试。同一 Linux 测试架构已验证离线排队、自动恢复、至少一次重发与
 > 桌面端去重。Windows/macOS SSH 服务端配置仍明确标记为未验证。阶段 17 的只读
 > doctor、角色感知 status、人类/JSON 一致输出、稳定健康退出码，以及感知投递结果的
-> 本地/远程自测均已实现，正在完成最终跨平台验证。
+> 本地/远程自测均已通过 Windows、macOS 14、当前 macOS 与 Linux relay 门禁。
 
 实施顺序与各阶段验收门槛见 [`stages.md`](stages.md)。
 

@@ -1,6 +1,6 @@
 # Stage 17 Verification
 
-Status: Branch verification pending
+Status: Complete
 
 Date: 2026-07-30
 
@@ -82,7 +82,17 @@ remediation, and payload-free diagnostics.
   rejection checks and Stage 16 offline recovery/deduplication checks remain in
   the same job.
 - Windows Session 0 and macOS 14/current no-Aqua diagnostics remain permanent
-  matrix gates. Branch run identifiers will be recorded after they complete.
+  matrix gates.
+- Initial branch run
+  [`30494371820`](https://github.com/LeopardRich/codex-notifier/actions/runs/30494371820)
+  exposed a transient reader/writer SQLite collision on Linux and macOS 14.
+  The bounded busy timeout and contention contract above fix the product issue
+  rather than weakening or serializing the command tests.
+- Final branch run
+  [`30494702956`](https://github.com/LeopardRich/codex-notifier/actions/runs/30494702956)
+  passed formatting, strict Clippy, all normal tests, the real OpenSSH
+  diagnostic/self-test/recovery matrix, Windows Session 0, and both macOS
+  no-Aqua jobs on commit `740baf3`.
 
 ## Privacy and read-only audit
 
@@ -111,8 +121,7 @@ remediation, and payload-free diagnostics.
 
 ## Completion decision
 
-- Stage 17 can be marked complete after the branch run passes all four jobs,
-  these changes are fast-forwarded to `main`, and the permanent `main` run is
-  green with the enhanced real OpenSSH path.
-- Until those gates pass, this document records implemented and locally
-  verified behavior rather than final Stage 17 completion.
+- The branch evidence satisfies every Stage 17 implementation and platform
+  criterion. Stage 17 is permanently closed only after these changes are
+  fast-forwarded to `main` and the `main` run is green with the enhanced real
+  OpenSSH path.
