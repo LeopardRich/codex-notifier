@@ -28,7 +28,7 @@ mod macos {
         NotificationBackend, NotificationContentPolicy, NotificationPolicy, NotificationStatus,
     };
     use objc2::MainThreadMarker;
-    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+    use objc2_app_kit::NSApplication;
     use objc2_foundation::{NSDate, NSRunLoop};
     use tempfile::Builder;
     use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -144,10 +144,6 @@ mod macos {
     fn request_authorization_with_application_run_loop() {
         let main_thread = MainThreadMarker::new().expect("smoke app must start on the main thread");
         let application = NSApplication::sharedApplication(main_thread);
-        assert!(
-            application.setActivationPolicy(NSApplicationActivationPolicy::Accessory),
-            "set accessory application activation policy"
-        );
         application.finishLaunching();
         application.activate();
 
