@@ -913,7 +913,7 @@ jobs:
             osascript .github/scripts/macos-probe-focus.applescript enable \
             >target/macos-focus-enable.txt 2>&1
           if [[ "$?" -ne 0 ]] || \
-            ! grep -q 'focus target=1 .*after=1' target/macos-focus-enable.txt; then
+            ! grep -q 'focus mode=enable focus-click' target/macos-focus-enable.txt; then
             result=126
           fi
           screencapture -x target/macos-focus-enabled.png \
@@ -1000,6 +1000,12 @@ jobs:
           if ! grep -q "$focus_event_id" target/macos-focus-unified.log; then
             result=128
           fi
+          focus_resolution=$(grep "$focus_event_id" target/macos-focus-unified.log | \
+            grep 'interruptionSuppression:' | tail -1)
+          if [[ -z "$focus_resolution" ]] || \
+            grep -q 'interruptionSuppression: none' <<<"$focus_resolution"; then
+            result=131
+          fi
           if grep "$focus_event_id" target/macos-focus-unified.log | \
             grep -Eq 'Presenting .* as banner|displaying as banner'; then
             result=129
@@ -1009,7 +1015,7 @@ jobs:
             osascript .github/scripts/macos-probe-focus.applescript disable \
             >target/macos-focus-disable.txt 2>&1
           if [[ "$?" -ne 0 ]] || \
-            ! grep -q 'focus target=0 before=1 after=0' target/macos-focus-disable.txt; then
+            ! grep -q 'focus mode=disable focus-click' target/macos-focus-disable.txt; then
             result=130
           fi
           cat target/macos-focus-enable.txt

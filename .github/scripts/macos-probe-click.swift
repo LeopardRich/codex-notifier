@@ -2,17 +2,28 @@ import CoreGraphics
 import Darwin
 import Foundation
 
-guard CommandLine.arguments.count == 4,
-      let mode = CommandLine.arguments.dropFirst().first,
-      ["move", "click"].contains(mode),
-      let x = Double(CommandLine.arguments[2]),
-      let y = Double(CommandLine.arguments[3])
-else {
-    fputs("usage: macos-probe-click <move|click> <x> <y>\n", stderr)
+guard CommandLine.arguments.count >= 2 else {
+    fputs("usage: macos-probe-click <move|click> <x> <y> | focus\n", stderr)
     exit(2)
 }
 
-let point = CGPoint(x: x, y: y)
+let mode = CommandLine.arguments[1]
+let point: CGPoint
+if mode == "focus" && CommandLine.arguments.count == 2 {
+    let bounds = CGDisplayBounds(CGMainDisplayID())
+    let focusY = ProcessInfo.processInfo.operatingSystemVersion.majorVersion <= 14 ? 71.0 : 330.0
+    point = CGPoint(x: bounds.maxX - 84.0, y: bounds.minY + focusY)
+    print("focus-click x=\(Int(point.x)) y=\(Int(point.y))")
+} else if ["move", "click"].contains(mode),
+          CommandLine.arguments.count == 4,
+          let x = Double(CommandLine.arguments[2]),
+          let y = Double(CommandLine.arguments[3]) {
+    point = CGPoint(x: x, y: y)
+} else {
+    fputs("usage: macos-probe-click <move|click> <x> <y> | focus\n", stderr)
+    exit(2)
+}
+
 CGWarpMouseCursorPosition(point)
 let source = CGEventSource(stateID: .hidSystemState)
 
