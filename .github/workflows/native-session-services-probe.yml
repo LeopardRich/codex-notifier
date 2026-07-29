@@ -195,29 +195,32 @@ jobs:
               "AppsFolderPath=$($appsItem.Path)"
             ) | Add-Content target\windows11-identity.txt
 
-            $process = Start-Process -FilePath $shortcut -PassThru -Wait
-            $exitCode = $process.ExitCode
-            "ShortcutExitCode=$exitCode" | Set-Content target\windows11-smoke.log
-            if ($exitCode -ne 0) {
-              $output = & $installedBinary `
+            $rawOutput = & $installedBinary `
+              --exact shows_raw_product_toast_before_reporting_notifier_state `
+              --ignored `
+              --nocapture 2>&1
+            $rawCode = $LASTEXITCODE
+            $rawOutput | Set-Content target\windows11-smoke.log
+            "RawShowExitCode=$rawCode" | Add-Content target\windows11-smoke.log
+            $exitCode = $rawCode
+
+            if ($rawCode -eq 0) {
+              $process = Start-Process -FilePath $shortcut -PassThru -Wait
+              $exitCode = $process.ExitCode
+              "ShortcutExitCode=$exitCode" | Add-Content target\windows11-smoke.log
+            }
+            if ($rawCode -eq 0 -and $exitCode -ne 0) {
+              $productOutput = & $installedBinary `
                 --exact displays_task_completion_and_approval_request_toasts `
                 --ignored `
                 --nocapture 2>&1
               $directCode = $LASTEXITCODE
-              $output | Add-Content target\windows11-smoke.log
+              $productOutput | Add-Content target\windows11-smoke.log
               "DirectExitCode=$directCode" | Add-Content target\windows11-smoke.log
               $exitCode = $directCode
             }
 
-            $rawOutput = & $installedBinary `
-              --exact reports_raw_product_notifier_state `
-              --ignored `
-              --nocapture 2>&1
-            $rawCode = $LASTEXITCODE
-            $rawOutput | Add-Content target\windows11-smoke.log
-            "RawStateExitCode=$rawCode" | Add-Content target\windows11-smoke.log
-
-            Start-Sleep -Milliseconds 500
+            Start-Sleep -Seconds 2
             Add-Type -AssemblyName System.Windows.Forms
             $screen = [System.Windows.Forms.SystemInformation]::VirtualScreen
             $bitmap = New-Object System.Drawing.Bitmap($screen.Width, $screen.Height)
