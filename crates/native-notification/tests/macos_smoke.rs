@@ -250,7 +250,7 @@ mod macos {
             fs::set_permissions(directory.path(), permissions)
                 .expect("make smoke directory traversable");
         }
-        let bundled = create_signed_product_bundle(directory.path());
+        let (bundle, bundled) = create_signed_product_bundle(directory.path());
 
         if let Some(user) = run_as_user {
             let mut command = Command::new("/usr/bin/sudo");
@@ -282,7 +282,7 @@ mod macos {
             ));
         }
         command
-            .arg(&bundled)
+            .arg(&bundle)
             .args(["--args", "--exact", test_name, "--ignored", "--nocapture"]);
         let status = command
             .status()
@@ -296,7 +296,9 @@ mod macos {
         );
     }
 
-    fn create_signed_product_bundle(directory: &std::path::Path) -> std::path::PathBuf {
+    fn create_signed_product_bundle(
+        directory: &std::path::Path,
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
         let bundle = directory.join("Codex Notifier.app");
         let contents = bundle.join("Contents");
         let macos = contents.join("MacOS");
@@ -347,7 +349,7 @@ mod macos {
             registered.success(),
             "LaunchServices registration failed: {registered}"
         );
-        bundled
+        (bundle, bundled)
     }
 
     fn info_plist() -> String {
