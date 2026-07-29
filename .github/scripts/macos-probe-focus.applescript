@@ -39,9 +39,11 @@ on run arguments
         delay 1
         perform action "AXPress" of controlCenterItem
         delay 2
-        set clickResult to do shell script quoted form of clickHelper & " focus"
+        set focusClickResult to do shell script quoted form of clickHelper & " focus"
+        delay 2
+        set dndClickResult to do shell script quoted form of clickHelper & " dnd"
         delay 2
         key code 53
-        return "focus mode=" & requestedMode & " " & clickResult
+        return "focus mode=" & requestedMode & " " & focusClickResult & " " & dndClickResult
     end tell
 end run

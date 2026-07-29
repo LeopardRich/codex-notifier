@@ -913,7 +913,7 @@ jobs:
             osascript .github/scripts/macos-probe-focus.applescript enable \
             >target/macos-focus-enable.txt 2>&1
           if [[ "$?" -ne 0 ]] || \
-            ! grep -q 'focus mode=enable focus-click' target/macos-focus-enable.txt; then
+            ! grep -q 'focus mode=enable focus-click .* dnd-click' target/macos-focus-enable.txt; then
             result=126
           fi
           screencapture -x target/macos-focus-enabled.png \
@@ -1015,7 +1015,7 @@ jobs:
             osascript .github/scripts/macos-probe-focus.applescript disable \
             >target/macos-focus-disable.txt 2>&1
           if [[ "$?" -ne 0 ]] || \
-            ! grep -q 'focus mode=disable focus-click' target/macos-focus-disable.txt; then
+            ! grep -q 'focus mode=disable focus-click .* dnd-click' target/macos-focus-disable.txt; then
             result=130
           fi
           cat target/macos-focus-enable.txt

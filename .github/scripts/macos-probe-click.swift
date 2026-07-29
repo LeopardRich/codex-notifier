@@ -3,24 +3,28 @@ import Darwin
 import Foundation
 
 guard CommandLine.arguments.count >= 2 else {
-    fputs("usage: macos-probe-click <move|click> <x> <y> | focus\n", stderr)
+    fputs("usage: macos-probe-click <move|click> <x> <y> | <focus|dnd>\n", stderr)
     exit(2)
 }
 
 let mode = CommandLine.arguments[1]
 let point: CGPoint
-if mode == "focus" && CommandLine.arguments.count == 2 {
+if ["focus", "dnd"].contains(mode) && CommandLine.arguments.count == 2 {
     let bounds = CGDisplayBounds(CGMainDisplayID())
-    let focusY = ProcessInfo.processInfo.operatingSystemVersion.majorVersion <= 14 ? 71.0 : 330.0
-    point = CGPoint(x: bounds.maxX - 84.0, y: bounds.minY + focusY)
-    print("focus-click x=\(Int(point.x)) y=\(Int(point.y))")
+    if mode == "focus" {
+        let focusY = ProcessInfo.processInfo.operatingSystemVersion.majorVersion <= 14 ? 71.0 : 330.0
+        point = CGPoint(x: bounds.maxX - 84.0, y: bounds.minY + focusY)
+    } else {
+        point = CGPoint(x: bounds.maxX - 220.0, y: bounds.minY + 97.0)
+    }
+    print("\(mode)-click x=\(Int(point.x)) y=\(Int(point.y))")
 } else if ["move", "click"].contains(mode),
           CommandLine.arguments.count == 4,
           let x = Double(CommandLine.arguments[2]),
           let y = Double(CommandLine.arguments[3]) {
     point = CGPoint(x: x, y: y)
 } else {
-    fputs("usage: macos-probe-click <move|click> <x> <y> | focus\n", stderr)
+    fputs("usage: macos-probe-click <move|click> <x> <y> | <focus|dnd>\n", stderr)
     exit(2)
 }
 
