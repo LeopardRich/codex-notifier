@@ -342,7 +342,7 @@ jobs:
           run_ui() {
             osascript .github/scripts/macos-lifecycle-ui.applescript >target/lifecycle-evidence/macos-ui-current.txt 2>&1 &
             ui_pid=$!
-            for poll in $(seq 1 300); do
+            for poll in $(seq 1 600); do
               if ! kill -0 "$ui_pid" 2>/dev/null; then
                 wait "$ui_pid" || true
                 return
@@ -367,7 +367,12 @@ jobs:
             if grep -q '^pressed=screen' target/lifecycle-evidence/macos-ui-current.txt; then screen_pressed=1; fi
             if grep -q '^pressed=notification-allow' target/lifecycle-evidence/macos-ui-current.txt; then settings_allow_pressed=1; fi
             if grep -q '^hovered=banner' target/lifecycle-evidence/macos-ui-current.txt; then banner_hovered=1; sleep 2; continue; fi
-            if grep -q '^pressed=banner' target/lifecycle-evidence/macos-ui-current.txt; then banner_pressed=1; sleep 2; continue; fi
+            if grep -q '^pressed=banner' target/lifecycle-evidence/macos-ui-current.txt; then
+              banner_pressed=1
+              open 'x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=io.github.leopardrich.codex-notifier' || true
+              sleep 2
+              continue
+            fi
             if grep -q '^pressed=settings-app' target/lifecycle-evidence/macos-ui-current.txt; then settings_app_pressed=1; sleep 2; continue; fi
             if grep -q '^pressed=settings-allow' target/lifecycle-evidence/macos-ui-current.txt; then settings_allow_pressed=1; settings_app_pressed=1; sleep 2; continue; fi
             sleep 0.5
