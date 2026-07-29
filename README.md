@@ -352,10 +352,11 @@ authoritative and diagnostics report `system_managed`.
 The bundle, Developer ID signing, notarization, and Aqua LaunchAgent resource
 contract is recorded in
 [`packaging/macos/README.md`](packaging/macos/README.md). An ignored smoke test
-self-bundles and ad-hoc signs the test executable, registers it with
-LaunchServices, launches it as an application, explicitly requests
-authorization, and submits both event kinds. Real visual confirmation on
-macOS 14 and the latest supported macOS remains unverified; see
+self-bundles and ad-hoc signs a foreground test application, registers it with
+LaunchServices, starts AppKit on the process main thread, explicitly requests
+authorization through the product backend, and submits both event kinds.
+Hosted macOS sessions did not expose the system permission UI, so real visual
+confirmation on macOS 14 and the latest supported macOS remains unverified; see
 [`docs/verification/stage-13.md`](docs/verification/stage-13.md).
 
 ## Security Model

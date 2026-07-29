@@ -304,8 +304,9 @@ passive level。适配器绝不使用会绕过专注模式的 time-sensitive 或
 
 应用包、Developer ID 签名、公证与 Aqua LaunchAgent 的资源契约见
 [`packaging/macos/README.md`](packaging/macos/README.md)。被忽略的冒烟测试会自行
-构造并临时签名测试应用包，向 LaunchServices 注册后作为应用启动，显式请求授权，
-然后提交两类事件。macOS 14 与最新支持版本上的真实视觉确认仍未验证；详见
+构造并临时签名前台测试应用包，向 LaunchServices 注册后在进程主线程启动 AppKit，
+通过产品后端显式请求授权，然后提交两类事件。托管 macOS 会话未显示系统权限界面，
+因此 macOS 14 与最新支持版本上的真实视觉确认仍未验证；详见
 [`docs/verification/stage-13.md`](docs/verification/stage-13.md)。
 
 ## 安全模型

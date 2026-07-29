@@ -30,13 +30,15 @@ and packaging resources.
   macOS-only tests cover bundle-ID validation, permission classification,
   framework denial mapping, display-only content, and active/passive
   interruption levels that never bypass Focus.
-- The ignored `macos_smoke` test creates and ad-hoc signs a temporary product-ID
-  app bundle, registers it with LaunchServices, launches it as an application,
-  explicitly requests permission, and verifies an inner success marker after
-  submitting both real event kinds. A separate native test proves a bare
-  executable reports missing identity, and an ignored headless test relaunches
-  the signed bundle without an Aqua launch domain. Normal test runs cannot
-  display notifications or prompt for access.
+- The ignored `macos_smoke` target is a custom executable so AppKit starts on
+  the actual process main thread instead of a libtest worker. It creates and
+  ad-hoc signs a temporary product-ID app bundle, registers it with
+  LaunchServices, launches it as a foreground application, services AppKit
+  events while the product backend explicitly requests permission, and
+  verifies an inner success marker after submitting both real event kinds. A
+  separate native path proves a bare executable reports missing identity, and
+  an ignored headless path relaunches the signed bundle without an Aqua launch
+  domain. Normal test runs cannot display notifications or prompt for access.
 - Packaging documentation freezes the Info.plist, icon, Developer ID signing,
   notarization, Aqua LaunchAgent, upgrade, uninstall, and ownership resources.
 
@@ -84,6 +86,12 @@ and packaging resources.
   warnings-as-errors Clippy and normal workspace tests, and passed the signed
   no-Aqua diagnostic. This closes the minimum-SDK build gap but is not an
   interactive authorization or display claim.
+- GitHub Actions run
+  [`30448479812`](https://github.com/LeopardRich/codex-notifier/actions/runs/30448479812)
+  passed the four permanent Windows, Linux, macOS 14, and current
+  `macos-latest` jobs after the main-thread smoke harness was added. Both macOS
+  jobs compiled the custom harness and passed all normal tests plus the signed
+  no-Aqua diagnostic. The ignored interactive path did not run.
 - A bounded hosted interactive probe in run
   [`30444848179`](https://github.com/LeopardRich/codex-notifier/actions/runs/30444848179)
   used real console/Aqua sessions on macOS 14.8.7 and macOS 26.4. Moving the
@@ -94,6 +102,21 @@ and packaging resources.
   the inner test without a grant. Its green workflow conclusion represents
   artifact collection only and is not authorization, denial, Focus, or display
   evidence.
+- Follow-up bounded probes
+  [`30446598148`](https://github.com/LeopardRich/codex-notifier/actions/runs/30446598148),
+  [`30446973757`](https://github.com/LeopardRich/codex-notifier/actions/runs/30446973757),
+  [`30447470640`](https://github.com/LeopardRich/codex-notifier/actions/runs/30447470640),
+  and
+  [`30448189220`](https://github.com/LeopardRich/codex-notifier/actions/runs/30448189220)
+  isolated the test-runner thread, application activation, synchronous bridge,
+  and AppKit event-dispatch hypotheses. On macOS 14.8.7 and macOS 26.4, the
+  final application was a foreground LaunchServices app with the exact product
+  identity. Its authorization requests reached UserNotifications, and the
+  latest host also established a ViewBridge connection. Neither host started a
+  visible Notification Center permission UI; screenshots remained unchanged,
+  automation found no `Allow` button, the completion callback did not run, and
+  no success marker was written. These runs establish a hosted-session
+  limitation, not a successful authorization or notification display.
 
 ## Required before completion
 
