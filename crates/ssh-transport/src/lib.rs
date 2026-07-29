@@ -19,6 +19,8 @@ pub const REQUESTED_COMMAND: &str = "codex-notifier receive";
 const MAX_SSH_CONNECTION_BYTES: usize = 512;
 const MAX_EVENT_READ_BYTES: u64 = 16_385;
 const MAX_SSH_CONFIG_BYTES: usize = 64 * 1024;
+#[cfg(windows)]
+const WINDOWS_PERMISSION_SCRIPT: &str = r"$ErrorActionPreference='Stop';$p=$env:CODEX_NOTIFIER_AUTHORIZED_KEYS;$acl=Get-Acl -LiteralPath $p;$sidType=[Security.Principal.SecurityIdentifier];$me=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;$allowed=@($me,'S-1-5-18','S-1-5-32-544');$owner=$acl.GetOwner($sidType).Value;$rules=$acl.GetAccessRules($true,$true,$sidType);$unsafe=$false;foreach($rule in $rules){$sid=$rule.IdentityReference.Value;$write=($rule.FileSystemRights -band [Security.AccessControl.FileSystemRights]::WriteData) -or ($rule.FileSystemRights -band [Security.AccessControl.FileSystemRights]::Modify) -or ($rule.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl);if($rule.AccessControlType -eq 'Allow' -and $write -and $allowed -notcontains $sid){$unsafe=$true}};if((-not $acl.AreAccessRulesProtected)-or($allowed -notcontains $owner)-or$unsafe){exit 3};exit 0";
 
 /// Fixed, payload-free receive failure classifications.
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
@@ -404,7 +406,6 @@ fn diagnose_unix_permissions(path: &Path, parent: &Path) -> DiagnosticStatus {
 
 #[cfg(windows)]
 fn diagnose_windows_permissions(path: &Path) -> DiagnosticStatus {
-    const SCRIPT: &str = r"$ErrorActionPreference='Stop';$p=$env:CODEX_NOTIFIER_AUTHORIZED_KEYS;$acl=Get-Acl -LiteralPath $p;$sidType=[Security.Principal.SecurityIdentifier];$me=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;$allowed=@($me,'S-1-5-18','S-1-5-32-544');$owner=$acl.GetOwner($sidType).Value;$rules=$acl.GetAccessRules($true,$true,$sidType);$unsafe=$false;foreach($rule in $rules){$sid=$rule.IdentityReference.Value;$write=($rule.FileSystemRights -band [Security.AccessControl.FileSystemRights]::WriteData) -or ($rule.FileSystemRights -band [Security.AccessControl.FileSystemRights]::Modify) -or ($rule.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl);if($rule.AccessControlType -eq 'Allow' -and $write -and $allowed -notcontains $sid){$unsafe=$true}};if((-not $acl.AreAccessRulesProtected)-or($allowed -notcontains $owner)-or$unsafe){exit 3};exit 0";
     // `-Command` is a fixed program string; the path is carried separately and
     // never interpolated. All subprocess output is discarded.
     match Command::new("powershell.exe")
@@ -413,7 +414,7 @@ fn diagnose_windows_permissions(path: &Path) -> DiagnosticStatus {
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            SCRIPT,
+            WINDOWS_PERMISSION_SCRIPT,
         ])
         .env("CODEX_NOTIFIER_AUTHORIZED_KEYS", path)
         .stdin(Stdio::null())
@@ -612,7 +613,26 @@ mod tests {
                 "PowerShell ACL setup failed: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
-            assert_eq!(diagnose_authorized_keys(&path), expected);
+            let actual = diagnose_authorized_keys(&path);
+            if actual == DiagnosticStatus::Unavailable {
+                let diagnostic = Command::new("powershell.exe")
+                    .args([
+                        "-NoLogo",
+                        "-NoProfile",
+                        "-NonInteractive",
+                        "-Command",
+                        WINDOWS_PERMISSION_SCRIPT,
+                    ])
+                    .env("CODEX_NOTIFIER_AUTHORIZED_KEYS", &path)
+                    .output()
+                    .expect("PowerShell ACL diagnostic");
+                panic!(
+                    "ACL diagnostic failed with {:?}: {}",
+                    diagnostic.status.code(),
+                    String::from_utf8_lossy(&diagnostic.stderr)
+                );
+            }
+            assert_eq!(actual, expected);
         }
     }
 }
