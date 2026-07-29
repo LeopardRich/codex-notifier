@@ -250,7 +250,54 @@ mod macos {
             fs::set_permissions(directory.path(), permissions)
                 .expect("make smoke directory traversable");
         }
-        let bundle = directory.path().join("Codex Notifier.app");
+        let bundled = create_signed_product_bundle(directory.path());
+
+        if let Some(user) = run_as_user {
+            let mut command = Command::new("/usr/bin/sudo");
+            command.args(["-u", user, "env", "HOME=/tmp", "TMPDIR=/tmp"]);
+            command.arg(&bundled);
+            let status = command
+                .args(["--exact", test_name, "--ignored", "--nocapture"])
+                .status()
+                .expect("launch bundled smoke test without Aqua");
+            assert!(status.success(), "bundled smoke test failed: {status}");
+            return;
+        }
+
+        let result_path = directory.path().join("smoke-result");
+        let stdout_path = directory.path().join("smoke-stdout.log");
+        let stderr_path = directory.path().join("smoke-stderr.log");
+        let mut command = Command::new("/usr/bin/open");
+        command
+            .args(["-W", "-n", "--stdout"])
+            .arg(&stdout_path)
+            .arg("--stderr")
+            .arg(&stderr_path)
+            .arg("--env")
+            .arg(format!("{RESULT_PATH_ENV}={}", result_path.display()));
+        if let Some(value) = std::env::var_os(RECOVER_AUTHORIZATION_ENV) {
+            command.arg("--env").arg(format!(
+                "{RECOVER_AUTHORIZATION_ENV}={}",
+                value.to_string_lossy()
+            ));
+        }
+        command
+            .arg(&bundled)
+            .args(["--args", "--exact", test_name, "--ignored", "--nocapture"]);
+        let status = command
+            .status()
+            .expect("launch bundled smoke test through LaunchServices");
+        let result = fs::read(&result_path).unwrap_or_default();
+        let stdout = fs::read_to_string(&stdout_path).unwrap_or_default();
+        let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+        assert!(
+            status.success() && result == b"ok",
+            "LaunchServices smoke failed: status={status}, result={result:?}, stdout={stdout:?}, stderr={stderr:?}"
+        );
+    }
+
+    fn create_signed_product_bundle(directory: &std::path::Path) -> std::path::PathBuf {
+        let bundle = directory.join("Codex Notifier.app");
         let contents = bundle.join("Contents");
         let macos = contents.join("MacOS");
         fs::create_dir_all(&macos).expect("create smoke app bundle");
@@ -300,49 +347,7 @@ mod macos {
             registered.success(),
             "LaunchServices registration failed: {registered}"
         );
-
-        if let Some(user) = run_as_user {
-            let mut command = Command::new("/usr/bin/sudo");
-            command.args(["-u", user, "env", "HOME=/tmp", "TMPDIR=/tmp"]);
-            command.arg(&bundled);
-            let status = command
-                .args(["--exact", test_name, "--ignored", "--nocapture"])
-                .status()
-                .expect("launch bundled smoke test without Aqua");
-            assert!(status.success(), "bundled smoke test failed: {status}");
-            return;
-        }
-
-        let result_path = directory.path().join("smoke-result");
-        let stdout_path = directory.path().join("smoke-stdout.log");
-        let stderr_path = directory.path().join("smoke-stderr.log");
-        let mut command = Command::new("/usr/bin/open");
-        command
-            .args(["-W", "-n", "--stdout"])
-            .arg(&stdout_path)
-            .arg("--stderr")
-            .arg(&stderr_path)
-            .arg("--env")
-            .arg(format!("{RESULT_PATH_ENV}={}", result_path.display()));
-        if let Some(value) = std::env::var_os(RECOVER_AUTHORIZATION_ENV) {
-            command.arg("--env").arg(format!(
-                "{RECOVER_AUTHORIZATION_ENV}={}",
-                value.to_string_lossy()
-            ));
-        }
-        command
-            .arg(&bundle)
-            .args(["--args", "--exact", test_name, "--ignored", "--nocapture"]);
-        let status = command
-            .status()
-            .expect("launch bundled smoke test through LaunchServices");
-        let result = fs::read(&result_path).unwrap_or_default();
-        let stdout = fs::read_to_string(&stdout_path).unwrap_or_default();
-        let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
-        assert!(
-            status.success() && result == b"ok",
-            "LaunchServices smoke failed: status={status}, result={result:?}, stdout={stdout:?}, stderr={stderr:?}"
-        );
+        bundled
     }
 
     fn info_plist() -> String {
