@@ -11,14 +11,11 @@ fn main() {
 #[cfg(target_os = "macos")]
 mod macos {
 
-    use std::cell::Cell;
     use std::collections::BTreeMap;
     use std::ffi::OsStr;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
-    use std::ptr::NonNull;
-    use std::rc::Rc;
     use std::sync::{Arc, mpsc};
     use std::thread;
     use std::time::{Duration, Instant};
@@ -32,8 +29,8 @@ mod macos {
         NotificationBackend, NotificationContentPolicy, NotificationPolicy, NotificationStatus,
     };
     use objc2::{MainThreadMarker, runtime::Bool};
-    use objc2_app_kit::NSApplication;
-    use objc2_foundation::{NSError, NSTimer};
+    use objc2_app_kit::{NSApplication, NSEventMask};
+    use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSError};
     use objc2_user_notifications::{UNAuthorizationOptions, UNUserNotificationCenter};
     use tempfile::Builder;
     use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -164,43 +161,36 @@ mod macos {
             &completion,
         );
 
-        let outcome = Rc::new(Cell::new(None));
-        let timer_outcome = Rc::clone(&outcome);
         let deadline = Instant::now() + AUTHORIZATION_TIMEOUT;
-        let timer_handler = RcBlock::new(move |_timer: NonNull<NSTimer>| {
+        loop {
             match receiver.try_recv() {
-                Ok(result) => {
-                    timer_outcome.set(Some(Ok(result)));
+                Ok((granted, error_free)) => {
+                    assert!(
+                        error_free,
+                        "macOS notification authorization returned an error"
+                    );
+                    assert!(granted, "macOS notification authorization must be granted");
+                    break;
                 }
-                Err(mpsc::TryRecvError::Empty) if Instant::now() < deadline => return,
-                Err(mpsc::TryRecvError::Empty) => {
-                    timer_outcome.set(Some(Err("macOS notification authorization timed out")));
-                }
+                Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    timer_outcome.set(Some(Err(
-                        "authorization callback disconnected without a result",
-                    )));
+                    panic!("authorization callback disconnected without a result");
                 }
             }
-            let main_thread =
-                MainThreadMarker::new().expect("authorization timer must run on the main thread");
-            NSApplication::sharedApplication(main_thread).stop(None);
-        });
-        let timer = unsafe {
-            NSTimer::scheduledTimerWithTimeInterval_repeats_block(0.05, true, &timer_handler)
-        };
-        application.run();
-        timer.invalidate();
-
-        let (granted, error_free) = outcome
-            .take()
-            .expect("application event loop stopped without an authorization result")
-            .expect("macOS notification authorization failed");
-        assert!(
-            error_free,
-            "macOS notification authorization returned an error"
-        );
-        assert!(granted, "macOS notification authorization must be granted");
+            assert!(
+                Instant::now() < deadline,
+                "macOS notification authorization timed out"
+            );
+            let next_poll = NSDate::dateWithTimeIntervalSinceNow(0.05);
+            if let Some(event) = application.nextEventMatchingMask_untilDate_inMode_dequeue(
+                NSEventMask::Any,
+                Some(&next_poll),
+                NSDefaultRunLoopMode,
+                true,
+            ) {
+                application.sendEvent(&event);
+            }
+        }
     }
 
     fn running_from_application_bundle() -> bool {

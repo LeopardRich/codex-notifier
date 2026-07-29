@@ -24,14 +24,15 @@ interprocess = { version = "2.4.2", features = ["tokio"] }
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSApplication",
+    "NSEvent",
     "NSResponder",
 ] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "alloc",
     "NSBundle",
     "NSDate",
+    "NSRunLoop",
     "NSString",
-    "NSTimer",
 ] }
 objc2-user-notifications = { version = "0.3.2", default-features = false, features = [
     "UNUserNotificationCenter",
