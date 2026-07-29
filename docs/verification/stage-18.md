@@ -103,6 +103,11 @@ The normative evidence levels and four-path matrix are in
   and the real OpenSSH job remained green. ADR-0007 now uses a conservative
   30-second batch ceiling, which still bounds average sequential acceptance to
   300 ms while preserving the independent 5-second per-hook limit.
+- Corrected branch-head run
+  [`30496978161`](https://github.com/LeopardRich/codex-notifier/actions/runs/30496978161)
+  passed all four jobs on commit `39e93e5`, including the revised Windows load
+  gate, Windows Session 0 diagnostic, both macOS no-Aqua diagnostics, and the
+  real OpenSSH delivery/recovery matrix.
 - The `actions/checkout@v4` Node.js 20 deprecation notice is a non-blocking
   upstream action warning; all project checks completed successfully.
 
