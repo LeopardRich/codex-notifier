@@ -84,11 +84,11 @@ offline recovery, and at-least-once desktop deduplication.
   from a new agent without another submission. A separate unit test freezes the
   lease formula and proves the maximum 125-second SSH process lifetime is
   covered by a 130-second durable lease.
-- Branch CI run
-  [`30489355890`](https://github.com/LeopardRich/codex-notifier/actions/runs/30489355890)
+- Final code branch CI run
+  [`30490753397`](https://github.com/LeopardRich/codex-notifier/actions/runs/30490753397)
   passed formatting, strict Clippy, normal tests, the Windows Session 0 check,
   both macOS no-Aqua checks, and the enhanced Ubuntu OpenSSH integration job on
-  commit `fce0fa4`.
+  commit `bae9962`.
 
 ## Real OpenSSH recovery verification
 
