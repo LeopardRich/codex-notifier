@@ -29,7 +29,10 @@ and packaging resources.
   interruption levels that never bypass Focus.
 - The ignored `macos_smoke` test creates and ad-hoc signs a temporary product-ID
   app bundle, explicitly requests permission, then submits both real event
-  kinds. Normal test runs cannot display notifications or prompt for access.
+  kinds. A separate native test proves a bare executable reports missing
+  identity, and an ignored headless test relaunches the signed bundle without
+  an Aqua launch domain. Normal test runs cannot display notifications or
+  prompt for access.
 - Packaging documentation freezes the Info.plist, icon, Developer ID signing,
   notarization, Aqua LaunchAgent, upgrade, uninstall, and ownership resources.
 
@@ -62,12 +65,19 @@ and packaging resources.
   `macos-latest` runner. This exercised the Swift bridge build and Apple
   framework linking. The ignored interactive smoke test did not run, so this is
   not authorization or notification-display evidence.
+- GitHub Actions run
+  [`30439550334`](https://github.com/LeopardRich/codex-notifier/actions/runs/30439550334)
+  passed the permanent headless diagnostic gate. The runner first built and
+  ad-hoc signed the exact temporary product bundle, then launched only the
+  inner test as `nobody`; the resulting process had no Aqua launch domain and
+  reported `no_gui_session`. The same native run also passed the non-bundled
+  missing-identity test. No notification permission was requested.
 
 ## Required before completion
 
 - Run the ignored smoke test from an interactive signed bundle and visually
   confirm both event kinds on macOS 14.
 - Repeat the same confirmation on the latest supported macOS release.
-- Record first authorization, denial, Focus/Do Not Disturb, and no-GUI session
-  diagnostics in real system states.
+- Record first authorization, denial, and Focus/Do Not Disturb behavior in real
+  interactive system states.
 - Until these interactive items are complete, Stage 13 is not a support claim.

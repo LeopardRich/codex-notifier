@@ -59,6 +59,15 @@ Scope: Windows native Toast adapter and diagnostics.
   not change the live `ToastNotifier.Setting`; the test restored the original
   missing value. Disabled-state evidence must therefore use the Windows
   Settings UI rather than an unsupported registry simulation.
+- On the interactive Windows 10 host, a valid but never-registered diagnostic
+  AUMID produced `application_identity_missing`. The product AUMID was not used
+  for this check because Windows retains notification-history and Shell cache
+  entries after the installer-owned identity resources are removed.
+- GitHub Actions run
+  [`30439550334`](https://github.com/LeopardRich/codex-notifier/actions/runs/30439550334)
+  ran the ignored non-interactive diagnostic from a temporary SYSTEM scheduled
+  task. The real Session 0 process reported `no_interactive_session`, and the
+  task was unregistered in the workflow's cleanup path.
 - All temporary Start Menu shortcuts and unpackaged-app registration values
   were removed. The Windows-owned notification-history key was retained, and
   no user startup item or Codex hook was changed.
@@ -67,7 +76,7 @@ Scope: Windows native Toast adapter and diagnostics.
 
 - Record user visual confirmation for both accepted Windows 10 22H2 Toasts.
 - Repeat both Toasts on the latest supported Windows 11 release.
-- Exercise notifications disabled, Focus Assist/Do Not Disturb, missing
-  identity, and non-interactive session diagnostics in real system states.
+- Exercise notifications disabled and Focus Assist/Do Not Disturb in real
+  system states.
 - Until these real-platform items are complete, Stage 12 must not be marked
   complete.
