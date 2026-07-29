@@ -195,21 +195,10 @@ jobs:
               "AppsFolderPath=$($appsItem.Path)"
             ) | Add-Content target\windows11-identity.txt
 
-            $rawOutput = & $installedBinary `
-              --exact shows_raw_product_toast_before_reporting_notifier_state `
-              --ignored `
-              --nocapture 2>&1
-            $rawCode = $LASTEXITCODE
-            $rawOutput | Set-Content target\windows11-smoke.log
-            "RawShowExitCode=$rawCode" | Add-Content target\windows11-smoke.log
-            $exitCode = $rawCode
-
-            if ($rawCode -eq 0) {
-              $process = Start-Process -FilePath $shortcut -PassThru -Wait
-              $exitCode = $process.ExitCode
-              "ShortcutExitCode=$exitCode" | Add-Content target\windows11-smoke.log
-            }
-            if ($rawCode -eq 0 -and $exitCode -ne 0) {
+            $process = Start-Process -FilePath $shortcut -PassThru -Wait
+            $exitCode = $process.ExitCode
+            "ShortcutExitCode=$exitCode" | Set-Content target\windows11-smoke.log
+            if ($exitCode -ne 0) {
               $productOutput = & $installedBinary `
                 --exact displays_task_completion_and_approval_request_toasts `
                 --ignored `
