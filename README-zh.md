@@ -6,7 +6,7 @@
 Codex 事件转换为 Windows 或 macOS 原生系统通知，并支持 Codex 运行在远程
 服务器上的场景。
 
-> 当前状态：阶段 01-12 已完成，兼容性证据、架构决策、Rust workspace、三平台
+> 当前状态：阶段 01-13 已完成，兼容性证据、架构决策、Rust workspace、三平台
 > 质量门禁、规范事件领域模型、分层配置、跨平台路径规则与结构化脱敏日志模型均已
 > 建立，事务性 SQLite 发件箱/去重存储、有界的用户级本地 IPC、角色感知 agent
 > 生命周期、持久背压和有界 worker 排空也已完成；Codex CLI 0.144.5 的 CLI
@@ -15,8 +15,8 @@ Codex 事件转换为 Windows 或 macOS 原生系统通知，并支持 Codex 运
 > 身份 Toast 投递以及真实的应用级关闭、专注助手、身份缺失和 Session 0 状态已在
 > Windows 10 22H2 验证，全新身份的首次投递也已在 Windows 11 验证。macOS
 > UserNotifications 适配器、应用包契约、授权诊断、原生 CI 与无图形会话检查已经
-> 实现，但托管 runner 无法完成真实的交互授权、拒绝、专注模式和显示门禁。SSH 尚未
-> 实现。
+> 实现；首次授权、明确拒绝、两类事件横幅与勿扰抑制已在 macOS 14.8.7 和当前
+> macOS 26.4 runner 上验证。SSH 尚未实现。
 
 实施顺序与各阶段验收门槛见 [`stages.md`](stages.md)。
 
@@ -78,8 +78,8 @@ Codex 的事件能力可能随版本和使用界面而变化，因此所有集�
 审批请求。普通 CLI 的 `PermissionRequest` 生命周期 hook 仍未验证，在取得真实证据
 前必须报告为不可用。详见 [`docs/compatibility.md`](docs/compatibility.md) 与
 [ADR-0001](docs/decisions/0001-supported-versions.md)。初始操作系统构建下限为
-Windows 10 22H2（19045）和 macOS 14；在通过所需真实冒烟测试前，这些下限不构成
-原生通知支持声明。
+Windows 10 22H2（19045）和 macOS 14。阶段 12 与阶段 13 已为这些平台声明提供所需
+真实状态原生通知证据；发布包签名与公证仍是阶段 19 的独立门禁。
 
 ## 总体架构
 
@@ -309,12 +309,16 @@ passive level。适配器绝不使用会绕过专注模式的 time-sensitive 或
 
 应用包、Developer ID 签名、公证与 Aqua LaunchAgent 的资源契约见
 [`packaging/macos/README.md`](packaging/macos/README.md)。被忽略的冒烟测试会自行
-构造并临时签名前台测试应用包，向 LaunchServices 注册后在进程主线程启动 AppKit，
-通过产品后端显式请求授权，然后提交两类事件。即使启用了被禁用的通知 UI agent，
-并让应用包使用本机信任的签名身份，托管 macOS 会话仍未显示系统权限界面。两台主机
-都已到达 UserNotifications，但没有产生回调或提示，Notification Center 还报告了
-无效的 `usernoted` 连接。因此 macOS 14 与最新支持版本上的真实授权、拒绝、专注
-模式和视觉确认仍未验证；详见
+构造前台测试应用包，支持临时签名或显式测试签名，向 LaunchServices 注册后在进程
+主线程启动 AppKit。授权路径会提交两类事件；全新状态拒绝路径会验证
+`DisabledForApplication`；专注模式路径会提交不请求绕过级别的稳定探测事件。
+
+macOS 14.8.7 与 macOS 26.4 的真实托管 runner 检查已执行首次授权流程，并从截图
+确认两类固定私密横幅；独立的全新 runner 验证了明确拒绝。通过控制中心启用勿扰后，
+两个版本都没有显示探测横幅，原生日志把稳定事件 ID 与活动专注模式下的延迟投递关联
+起来，随后原有专注状态已恢复。永久 CI 还覆盖无 Aqua 会话诊断。由于仓库没有 Apple
+签名 secret，这些检查使用只在临时 runner 上受信任的签名链；Apple Developer ID
+签名、公证与可分发安装包验证仍属于阶段 19。详见
 [`docs/verification/stage-13.md`](docs/verification/stage-13.md)。
 
 ## 安全模型

@@ -33,6 +33,8 @@ Linux desktop notifications remain out of scope.
 
 The ignored `windows_smoke` integration test deliberately displays one real
 Toast for each event kind and must be invoked only in an interactive test
-session. The ignored `macos_smoke` test creates an ad-hoc signed product-ID app
-bundle, explicitly requests authorization, and submits one real notification
-for each event kind in an interactive Aqua session.
+session. The ignored `macos_smoke` harness creates a signed product-ID app
+bundle and provides explicit interactive paths for authorization grant,
+authorization denial, both real event notifications, Focus suppression, and
+the no-Aqua diagnostic. It defaults to ad-hoc signing but accepts an explicit
+test identity and keychain when the test environment requires trusted code.

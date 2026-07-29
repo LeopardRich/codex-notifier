@@ -19,6 +19,7 @@ rust-version = "1.88"
 license = "MIT"
 
 [workspace.dependencies]
+block2 = "0.6.2"
 interprocess = { version = "2.4.2", features = ["tokio"] }
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
@@ -32,6 +33,10 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSDate",
     "NSRunLoop",
     "NSString",
+] }
+objc2-user-notifications = { version = "0.3.2", default-features = false, features = [
+    "UNUserNotificationCenter",
+    "block2",
 ] }
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 serde = { version = "1.0.219", features = ["derive"] }

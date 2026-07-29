@@ -6,7 +6,7 @@
 It turns Codex events that need human attention into native Windows or macOS
 notifications, including events produced by Codex running on a remote server.
 
-> Status: Stages 01-12 are complete: compatibility evidence, architecture
+> Status: Stages 01-13 are complete: compatibility evidence, architecture
 > decisions, the Rust workspace, three-platform quality gates, and the
 > canonical event domain model, layered configuration, and cross-platform path
 > rules are established, together with structured redacted logging and the
@@ -20,9 +20,9 @@ notifications, including events produced by Codex running on a remote server.
 > identity, and Session 0 states are verified on Windows 10 22H2, and fresh
 > first-use delivery is verified on Windows 11. The macOS UserNotifications
 > adapter, bundle contract, authorization diagnostics, native CI, and headless
-> checks are implemented; hosted runners cannot complete the real interactive
-> authorization, denial, Focus, or display gates. SSH has not been implemented
-> yet.
+> checks are implemented; first authorization, explicit denial, both event
+> banners, and Do Not Disturb suppression are verified on macOS 14.8.7 and the
+> current macOS 26.4 runner. SSH has not been implemented yet.
 
 The implementation sequence and acceptance gates are defined in
 [`stages.md`](stages.md).
@@ -88,8 +88,9 @@ the app-server JSON-RPC interface on Windows 10 22H2. The ordinary CLI
 unavailable until real evidence exists. See
 [`docs/compatibility.md`](docs/compatibility.md) and
 [ADR-0001](docs/decisions/0001-supported-versions.md). The initial OS build
-floors are Windows 10 22H2 (19045) and macOS 14; neither platform is a native
-notification support claim until its required smoke tests pass.
+floors are Windows 10 22H2 (19045) and macOS 14. Stages 12 and 13 provide the
+required real-state native notification evidence for those platform claims;
+release-package signing and notarization remain separate Stage 19 gates.
 
 ## Architecture
 
@@ -358,16 +359,22 @@ authoritative and diagnostics report `system_managed`.
 
 The bundle, Developer ID signing, notarization, and Aqua LaunchAgent resource
 contract is recorded in
-[`packaging/macos/README.md`](packaging/macos/README.md). An ignored smoke test
-self-bundles and ad-hoc signs a foreground test application, registers it with
-LaunchServices, starts AppKit on the process main thread, explicitly requests
-authorization through the product backend, and submits both event kinds.
-Hosted macOS sessions did not expose the system permission UI even after the
-disabled UI agent was enabled and the bundle used a locally trusted signing
-identity. Both hosts reached UserNotifications, but no callback or prompt was
-produced and Notification Center reported an invalid `usernoted` connection.
-Real authorization, denial, Focus, and visual confirmation on macOS 14 and the
-latest supported macOS therefore remain unverified; see
+[`packaging/macos/README.md`](packaging/macos/README.md). The ignored smoke
+harness self-bundles a foreground test application, accepts either ad-hoc or
+explicit test signing, registers with LaunchServices, and starts AppKit on the
+process main thread. Its grant path submits both event kinds, its fresh-state
+denial path verifies `DisabledForApplication`, and its Focus path submits a
+stable probe event without requesting a bypass level.
+
+Real hosted-runner checks on macOS 14.8.7 and macOS 26.4 exercised the first
+authorization flow and visually confirmed both fixed private banners. Fresh
+runners verified explicit denial. Enabling Do Not Disturb through Control
+Center suppressed the probe banner on both versions, and native logs tied the
+stable event ID to delayed delivery under an active Focus mode; the original
+Focus state was restored. The no-Aqua diagnostic is also covered by permanent
+CI. These checks used a temporary locally trusted signing chain because the
+repository has no Apple signing secret. Apple-issued Developer ID signing,
+notarization, and distributable-package validation remain Stage 19 work; see
 [`docs/verification/stage-13.md`](docs/verification/stage-13.md).
 
 ## Security Model

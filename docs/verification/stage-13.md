@@ -1,6 +1,6 @@
 # Stage 13 Verification
 
-Status: In progress
+Status: Complete
 
 Date: 2026-07-29
 
@@ -144,22 +144,66 @@ and packaging resources.
   macOS 14 and macOS latest. The probe restored the launch-agent override and
   bounded deletion of the temporary signing material.
 
-## Hosted-runner blocker
+## Final real-state verification
 
-- The hosted path has exhausted application-main-thread, AppKit-run-loop,
-  LaunchServices, UI-agent, screen-capture, and locally valid signing
-  hypotheses. The remaining required evidence needs an interactive Mac where
-  Notification Center and `usernoted` are supported session services, plus a
-  release-appropriate Apple signing identity when validating the distributable
-  package.
-- Hosted artifacts cannot substitute for the first grant, explicit denial,
-  Focus/Do Not Disturb, and two-event visual checks required by this stage.
+- GitHub Actions run
+  [`30470133739`](https://github.com/LeopardRich/codex-notifier/actions/runs/30470133739)
+  for commit `2c7f362222b8b6a3df42c13972595e207ebea0b3` passed all five
+  probe jobs: the Windows 11 regression control, grant/display/Focus on macOS
+  14.8.7 and macOS 26.4, and fresh denial on both macOS versions. The temporary
+  branch workflow was an evidence harness, not a permanent CI or product
+  component.
+- Both grant jobs started from fresh hosted runners, built the exact product-ID
+  app bundle, registered it with LaunchServices, and signed it with a temporary
+  certificate chain trusted only on that runner. The real permission
+  notification and the System Settings `Allow notifications` control were
+  exercised. The product diagnostic then reported `Ready`. Evidence is in the
+  `macos-14-grant-session-services` and
+  `macos-latest-grant-session-services` artifacts.
+- On each macOS version, native screenshots visibly confirm both fixed private
+  notifications: `Codex task finished` / `Open Codex to review the result.` and
+  `Codex needs approval` / `Open Codex to review the request.` The events used
+  stable canonical IDs ending in `0014` and `0015`; UserNotifications accepted
+  both through the product adapter. The corresponding files are
+  `macos-task-completed.png` and `macos-approval-requested.png` in each grant
+  artifact.
+- Each denial job used a separate fresh runner and selected the native
+  notification denial path. The authorization callback reported
+  `granted=false, error_free=false`, and the product diagnostic reported
+  `DisabledForApplication` with Focus `SystemManaged`. Unified logs recorded
+  `didGrant: 0` with an authorization error on both versions. The
+  `macos-14-denial-session-services` and
+  `macos-latest-denial-session-services` artifacts preserve the prompt,
+  callback, diagnostic, and unified-log evidence.
+- Each grant job enabled `Control Center -> Focus -> Do Not Disturb`, submitted
+  event `01983c8d-b800-7000-8000-000000000016`, and continuously inspected the
+  real Notification Center UI. All 17 macOS 14 polls and all seven macOS 26.4
+  polls reported no matching banner. Unified logs tied that event ID to
+  `interruptionSuppression: delay delivery` and a non-null `activeModeUUID`;
+  macOS 26.4 also recorded `outcome: suppressed`. Screenshots show Do Not
+  Disturb active and no probe banner. Each grant artifact preserves the AX
+  polling in `macos-focus-ui-history.txt`, native resolution in
+  `macos-focus-unified.log`, and final screen in
+  `macos-focus-after-delivery.png`.
+- The same native Control Center sequence restored Do Not Disturb to off on
+  both runners; `macos-focus-enable.txt` and `macos-focus-disable.txt` record
+  both transitions. Cleanup also restored the hosted image's original
+  notification UI-agent state and removed the temporary keychain, certificate,
+  app bundle, and probe material.
+- Permanent CI run
+  [`30470133228`](https://github.com/LeopardRich/codex-notifier/actions/runs/30470133228)
+  passed all Windows, Linux, macOS 14, and current `macos-latest` gates for the
+  same commit. This includes formatting, warnings-as-errors Clippy, normal
+  workspace tests, macOS smoke-target compilation, the non-bundled
+  missing-identity check, and the signed no-Aqua `no_gui_session` diagnostic.
 
-## Required before completion
+## Completion assessment
 
-- Run the ignored smoke test from an interactive signed bundle and visually
-  confirm both event kinds on macOS 14.
-- Repeat the same confirmation on the latest supported macOS release.
-- Record first authorization, denial, and Focus/Do Not Disturb behavior in real
-  interactive system states.
-- Until these interactive items are complete, Stage 13 is not a support claim.
+- The minimum and latest supported macOS versions displayed both real event
+  kinds and exercised first authorization, explicit denial, Focus suppression,
+  restoration, missing identity, and no-GUI diagnostics. Unicode/control/text
+  bounds and non-macOS dependency isolation remain covered by automated tests.
+- Stage 13 is complete. The locally trusted probe identity establishes native
+  adapter behavior but is not an Apple-issued release identity; Developer ID
+  signing, notarization, and validation of distributable artifacts remain
+  required by Stage 19.
