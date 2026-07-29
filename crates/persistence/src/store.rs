@@ -21,6 +21,7 @@ use crate::{
 pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 const MAX_SAFE_CODE_BYTES: usize = 64;
 const MAX_LEASE_TOKEN_BYTES: usize = 64;
+const DATABASE_BUSY_TIMEOUT: Duration = Duration::from_millis(250);
 
 const CREATE_SCHEMA_V1: &str = r"
 CREATE TABLE IF NOT EXISTS outbox (
@@ -176,7 +177,7 @@ impl SqliteStore {
         policy: StorePolicy,
     ) -> Result<Self, PersistenceError> {
         connection
-            .busy_timeout(Duration::ZERO)
+            .busy_timeout(DATABASE_BUSY_TIMEOUT)
             .map_err(map_sqlite_error)?;
         connection
             .pragma_update(None, "foreign_keys", "ON")
@@ -610,11 +611,15 @@ fn open_read_only(path: &Path) -> Result<Connection, PersistenceError> {
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(PersistenceError::StorageUnwritable);
     }
-    Connection::open_with_flags(
+    let connection = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
-    .map_err(map_sqlite_error)
+    .map_err(map_sqlite_error)?;
+    connection
+        .busy_timeout(DATABASE_BUSY_TIMEOUT)
+        .map_err(map_sqlite_error)?;
+    Ok(connection)
 }
 
 fn verify_current_schema(connection: &Connection) -> Result<(), PersistenceError> {

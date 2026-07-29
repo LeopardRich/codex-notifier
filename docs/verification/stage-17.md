@@ -47,13 +47,17 @@ remediation, and payload-free diagnostics.
 
 - On Windows 10 22H2 with Rust 1.88 GNU, `cargo fmt --all -- --check`, strict
   all-target/all-feature workspace Clippy, and `cargo test --workspace` pass.
-- The completed local suite contains 138 automated tests. Four tests that show
+- The completed local suite contains 139 automated tests. Four tests that show
   real Windows Toasts or require temporary operating-system state remain
   intentionally ignored by the normal suite.
 - Persistence contracts prove read-only inspection does not create a missing
   database or migrate a version-zero database. Snapshot tests cover counts,
   oldest/latest timestamps, event pending/delivered state, cross-table
   corruption, invalid timestamps, and unsafe database types.
+- File-backed stores and read-only inspectors use a bounded 250 ms SQLite busy
+  timeout. A contention contract holds a read transaction while a delivery
+  acknowledgement waits, releases it after 50 ms, and proves the writer
+  succeeds instead of terminating the agent worker.
 - IPC contracts prove the health probe reaches a same-user listener without an
   event frame. SSH unit contracts freeze the empty-input acknowledgement and
   all existing bounded process/error behavior.

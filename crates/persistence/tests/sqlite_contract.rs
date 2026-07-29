@@ -264,6 +264,38 @@ fn read_only_snapshot_rejects_invalid_metadata_timestamps() {
 }
 
 #[test]
+fn brief_read_only_contention_does_not_fail_a_delivery_transition() {
+    let directory = tempdir().expect("temporary directory");
+    let path = directory.path().join("state.sqlite3");
+    let fixture = event(ID_1, EventKind::TaskCompleted, NOW_MS - 1_000);
+    let mut store = SqliteStore::open(&path, StorePolicy::default()).expect("store");
+    store.enqueue(&fixture, NOW_MS).expect("enqueue");
+    store
+        .lease_next(NOW_MS, "lease-01")
+        .expect("lease")
+        .expect("leased event");
+
+    let mut reader = Connection::open(&path).expect("reader");
+    let transaction = reader.transaction().expect("read transaction");
+    let count: i64 = transaction
+        .query_row("SELECT COUNT(*) FROM outbox", [], |row| row.get(0))
+        .expect("read lock");
+    assert_eq!(count, 1);
+    let writer =
+        std::thread::spawn(move || store.acknowledge(fixture.event_id(), "lease-01", NOW_MS + 1));
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    transaction.commit().expect("release read lock");
+
+    writer
+        .join()
+        .expect("writer thread")
+        .expect("bounded writer wait");
+    let snapshot = SqliteStore::inspect_read_only(&path).expect("snapshot");
+    assert_eq!(snapshot.queue_entries(), 0);
+    assert_eq!(snapshot.receipt_entries(), 1);
+}
+
+#[test]
 fn retries_schedule_then_dead_letter_at_the_attempt_limit() {
     let policy = StorePolicy::default().with_max_attempts(2).expect("policy");
     let mut store = SqliteStore::open_in_memory(policy).expect("memory store");
