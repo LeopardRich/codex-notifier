@@ -342,7 +342,7 @@ jobs:
           run_ui() {
             osascript .github/scripts/macos-lifecycle-ui.applescript >target/lifecycle-evidence/macos-ui-current.txt 2>&1 &
             ui_pid=$!
-            for poll in $(seq 1 100); do
+            for poll in $(seq 1 300); do
               if ! kill -0 "$ui_pid" 2>/dev/null; then
                 wait "$ui_pid" || true
                 return
