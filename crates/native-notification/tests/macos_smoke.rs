@@ -3,6 +3,7 @@
 #![cfg(target_os = "macos")]
 
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
@@ -20,7 +21,8 @@ use codex_notifier_native_notification::{
 use tempfile::Builder;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-const BUNDLED_SMOKE_ENV: &str = "CODEX_NOTIFIER_BUNDLED_MACOS_SMOKE";
+const RESULT_PATH_ENV: &str = "CODEX_NOTIFIER_MACOS_SMOKE_RESULT";
+const SMOKE_ROOT_ENV: &str = "CODEX_NOTIFIER_MACOS_SMOKE_ROOT";
 const TEST_NAME: &str = "displays_task_completion_and_approval_request_notifications";
 const NO_GUI_TEST_NAME: &str = "reports_real_no_gui_session";
 const EXECUTABLE_NAME: &str = "codex-notifier-macos-smoke";
@@ -45,7 +47,7 @@ fn event(kind: EventKind, id: &str, urgency: Urgency) -> CanonicalEvent {
 #[test]
 #[ignore = "requires an interactive Aqua session, prompts for authorization, and displays two notifications"]
 fn displays_task_completion_and_approval_request_notifications() {
-    if std::env::var_os(BUNDLED_SMOKE_ENV).is_none() {
+    if !running_from_application_bundle() {
         relaunch_in_product_bundle(TEST_NAME, None);
         return;
     }
@@ -80,6 +82,9 @@ fn displays_task_completion_and_approval_request_notifications() {
             Urgency::High,
         ))
         .expect("macOS accepted the approval-request notification");
+    if let Some(path) = std::env::var_os(RESULT_PATH_ENV) {
+        fs::write(path, b"ok").expect("write successful macOS smoke result");
+    }
 }
 
 #[test]
@@ -96,7 +101,7 @@ fn reports_real_missing_application_identity() {
 #[test]
 #[ignore = "requires a signed product bundle running without an Aqua launch domain"]
 fn reports_real_no_gui_session() {
-    if std::env::var_os(BUNDLED_SMOKE_ENV).is_none() {
+    if !running_from_application_bundle() {
         relaunch_in_product_bundle(NO_GUI_TEST_NAME, Some("nobody"));
         return;
     }
@@ -110,10 +115,25 @@ fn reports_real_no_gui_session() {
     );
 }
 
+fn running_from_application_bundle() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|executable| {
+            executable
+                .parent()
+                .and_then(std::path::Path::parent)
+                .and_then(std::path::Path::parent)
+                .map(std::path::Path::to_path_buf)
+        })
+        .is_some_and(|bundle| bundle.extension() == Some(OsStr::new("app")))
+}
+
 fn relaunch_in_product_bundle(test_name: &str, run_as_user: Option<&str>) {
+    let smoke_root =
+        std::path::PathBuf::from(std::env::var_os(SMOKE_ROOT_ENV).unwrap_or_else(|| "/tmp".into()));
     let directory = Builder::new()
         .prefix("codex-notifier-smoke-")
-        .tempdir_in("/tmp")
+        .tempdir_in(&smoke_root)
         .expect("temporary smoke bundle directory");
     if run_as_user.is_some() {
         let mut permissions = fs::metadata(directory.path())
@@ -150,23 +170,53 @@ fn relaunch_in_product_bundle(test_name: &str, run_as_user: Option<&str>) {
         .status()
         .expect("run ad-hoc codesign for smoke bundle");
     assert!(signed.success(), "ad-hoc codesign failed: {signed}");
+    let registered = Command::new(
+        "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
+    )
+    .arg("-f")
+    .arg(&bundle)
+    .status()
+    .expect("register smoke bundle with LaunchServices");
+    assert!(
+        registered.success(),
+        "LaunchServices registration failed: {registered}"
+    );
 
-    let mut command = if let Some(user) = run_as_user {
+    if let Some(user) = run_as_user {
         let mut command = Command::new("/usr/bin/sudo");
         command.args(["-u", user, "env", "HOME=/tmp", "TMPDIR=/tmp"]);
-        command.arg(format!("{BUNDLED_SMOKE_ENV}=1"));
         command.arg(&bundled);
-        command
-    } else {
-        let mut command = Command::new(&bundled);
-        command.env(BUNDLED_SMOKE_ENV, "1");
-        command
-    };
+        let status = command
+            .args(["--exact", test_name, "--ignored", "--nocapture"])
+            .status()
+            .expect("launch bundled smoke test without Aqua");
+        assert!(status.success(), "bundled smoke test failed: {status}");
+        return;
+    }
+
+    let result_path = directory.path().join("smoke-result");
+    let stdout_path = directory.path().join("smoke-stdout.log");
+    let stderr_path = directory.path().join("smoke-stderr.log");
+    let mut command = Command::new("/usr/bin/open");
+    command
+        .args(["-W", "-n", "--stdout"])
+        .arg(&stdout_path)
+        .arg("--stderr")
+        .arg(&stderr_path)
+        .arg("--env")
+        .arg(format!("{RESULT_PATH_ENV}={}", result_path.display()))
+        .arg(&bundle)
+        .args(["--args", "--exact", test_name, "--ignored", "--nocapture"]);
     let status = command
-        .args(["--exact", test_name, "--ignored", "--nocapture"])
         .status()
-        .expect("launch bundled smoke test");
-    assert!(status.success(), "bundled smoke test failed: {status}");
+        .expect("launch bundled smoke test through LaunchServices");
+    let result = fs::read(&result_path).unwrap_or_default();
+    let stdout = fs::read_to_string(&stdout_path).unwrap_or_default();
+    let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+    assert!(
+        status.success() && result == b"ok",
+        "LaunchServices smoke failed: status={status}, result={result:?}, stdout={stdout:?}, stderr={stderr:?}"
+    );
 }
 
 fn info_plist() -> String {

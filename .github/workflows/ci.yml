@@ -18,8 +18,10 @@ jobs:
         include:
           - target: windows-desktop
             os: windows-latest
-          - target: macos-desktop
+          - target: macos-latest-desktop
             os: macos-latest
+          - target: macos-14-desktop
+            os: macos-14
           - target: linux-relay
             os: ubuntu-22.04
 
@@ -80,9 +82,9 @@ jobs:
           }
 
       - name: Build macOS notification smoke tests
-        if: matrix.target == 'macos-desktop'
+        if: startsWith(matrix.target, 'macos-')
         run: cargo test -p codex-notifier-native-notification --test macos_smoke --no-run
 
       - name: Verify macOS no-Aqua diagnostic
-        if: matrix.target == 'macos-desktop'
+        if: startsWith(matrix.target, 'macos-')
         run: cargo test -p codex-notifier-native-notification --test macos_smoke reports_real_no_gui_session -- --ignored --exact --nocapture

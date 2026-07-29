@@ -4,12 +4,9 @@ version = 4
 
 [[package]]
 name = "apple-cf"
-version = "0.9.3"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7fd680cd0f3f02ee717b2014b26d18985c57b784384ba47213fcf8791e8c250"
-dependencies = [
- "doom-fish-utils",
-]
+checksum = "f18f9f1747c86d067ade130403a7bfc1ba3609de64d4b69ea0ac3296f3052d08"
 
 [[package]]
 name = "bitflags"
@@ -174,21 +171,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crossbeam-queue"
-version = "0.3.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "803d13fb3b09d88be9f4dbc29062c66b19bf7170867ceb746d2a8689bf6c7a26"
-dependencies = [
- "crossbeam-utils",
-]
-
-[[package]]
-name = "crossbeam-utils"
-version = "0.8.22"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61803da095bee82a81bb1a452ecc25d3b2f1416d1897eb86430c6159ef717c17"
-
-[[package]]
 name = "crypto-common"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -219,16 +201,6 @@ name = "doctest-file"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2db04e74f0a9a93103b50e90b96024c9b2bdca8bce6a632ec71b88736d3d359"
-
-[[package]]
-name = "doom-fish-utils"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c801f6c2a0db1a1909d89fc395b9dccc594de9ef599659fbde9bb3b55ef67f9f"
-dependencies = [
- "crossbeam-queue",
- "futures-util",
-]
 
 [[package]]
 name = "equivalent"
@@ -866,12 +838,11 @@ dependencies = [
 
 [[package]]
 name = "usernotifications-rs"
-version = "0.3.7"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ecc324cfffe936598bee9d1b04b1635ca00a1114b77beeda466092635d2fffc"
+checksum = "99b14612cec68605fa3b0d6355e74a1b4920d0d5c1cf363eeb11682240f8094b"
 dependencies = [
  "apple-cf",
- "doom-fish-utils",
  "libc",
  "serde",
  "serde_json",
