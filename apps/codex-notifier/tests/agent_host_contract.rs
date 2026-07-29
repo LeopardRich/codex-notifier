@@ -7,13 +7,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
 
-use codex_notifier::{AgentHost, EmitError, HostError, TaskCompletedEmitter};
+use codex_notifier::{
+    AgentHost, ApprovalRequestedEmitter, EmitError, HostError, TaskCompletedEmitter,
+};
 use codex_notifier_application::{
     AgentError, AgentLease, AgentPolicy, AgentQueue, AgentQueueError, AgentRuntime, AgentState,
     CancellationToken, DeliveryFuture, DeliveryOutcome, EnqueueResult, EventDelivery,
     RoleDeliveryFactory, RuntimeRole, SafeErrorCode,
 };
-use codex_notifier_codex_source::{SourceError, TaskCompletedContext};
+use codex_notifier_codex_source::{ApprovalRequestedContext, SourceError, TaskCompletedContext};
 use codex_notifier_config::{
     CliOverrides, Config, ConfigLoader, PathEnvironment, Platform, StateDirectoryProbe,
 };
@@ -247,6 +249,71 @@ fn task_completed_payload() -> Vec<u8> {
     serde_json::to_vec(&payload).expect("hook payload")
 }
 
+fn approval_requested_payload() -> Vec<u8> {
+    let fixture: serde_json::Value = serde_json::from_slice(include_bytes!(
+        "../../../tests/fixtures/codex-0.144.5-windows-cli-approval-requested.json"
+    ))
+    .expect("approval-request fixture");
+    let mut payload = fixture.get("payload").cloned().expect("fixture payload");
+    payload
+        .as_object_mut()
+        .expect("payload object")
+        .remove("observed_keys");
+    payload["params"]
+        .as_object_mut()
+        .expect("params object")
+        .remove("observed_keys");
+    payload["params"]["startedAtMs"] =
+        serde_json::json!(OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000);
+    serde_json::to_vec(&payload).expect("app-server payload")
+}
+
+async fn run_emit_child(event_name: &str, payload: &[u8], directory: &TempDir, ipc_profile: &str) {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_codex-notifier"))
+        .args([
+            "emit",
+            event_name,
+            "--codex-version",
+            "0.144.5",
+            "--state-dir",
+        ])
+        .arg(directory.path())
+        .args([
+            "--ipc-profile",
+            ipc_profile,
+            "--host-label",
+            "workstation",
+            "--project-label",
+            "codex-noti",
+            "--routing-profile",
+            "desktop",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("emit child");
+    child
+        .stdin
+        .take()
+        .expect("child stdin")
+        .write_all(payload)
+        .expect("write Codex payload");
+    let output = tokio::time::timeout(
+        StdDuration::from_secs(5),
+        tokio::task::spawn_blocking(move || child.wait_with_output()),
+    )
+    .await
+    .expect("emit timeout")
+    .expect("emit wait task")
+    .expect("emit output");
+    assert!(
+        output.status.success(),
+        "emit failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[derive(Clone, Copy)]
 struct WritableProbe;
 
@@ -337,7 +404,7 @@ async fn real_ipc_and_sqlite_route_only_to_selected_desktop_port() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn codex_hook_stdin_emit_reaches_agent_without_sensitive_values() {
+async fn codex_event_stdin_emit_reaches_agent_without_sensitive_values() {
     let directory = test_directory();
     let endpoint = endpoint(&directory);
     let ipc_profile = endpoint.profile().to_owned();
@@ -362,72 +429,57 @@ async fn codex_hook_stdin_emit_reaches_agent_without_sensitive_values() {
     });
     wait_ready(&runtime).await;
 
-    let payload = task_completed_payload();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_codex-notifier"))
-        .args([
-            "emit",
-            "task-completed",
-            "--codex-version",
-            "0.144.5",
-            "--state-dir",
-        ])
-        .arg(directory.path())
-        .args([
-            "--ipc-profile",
-            &ipc_profile,
-            "--host-label",
-            "workstation",
-            "--project-label",
-            "codex-noti",
-            "--routing-profile",
-            "desktop",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("emit child");
-    child
-        .stdin
-        .take()
-        .expect("child stdin")
-        .write_all(&payload)
-        .expect("write hook payload");
-    let output = tokio::time::timeout(
-        StdDuration::from_secs(5),
-        tokio::task::spawn_blocking(move || child.wait_with_output()),
+    run_emit_child(
+        "task-completed",
+        &task_completed_payload(),
+        &directory,
+        &ipc_profile,
     )
-    .await
-    .expect("emit timeout")
-    .expect("emit wait task")
-    .expect("emit output");
-    assert!(
-        output.status.success(),
-        "emit failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    .await;
+    run_emit_child(
+        "approval-requested",
+        &approval_requested_payload(),
+        &directory,
+        &ipc_profile,
+    )
+    .await;
 
     let submissions = queue.submissions();
-    assert_eq!(submissions.len(), 1);
-    let event = &submissions[0];
-    assert_eq!(event.kind(), EventKind::TaskCompleted);
-    assert_eq!(event.event_id().as_uuid().get_version_num(), 7);
-    assert_eq!(event.source().host_label(), "workstation");
-    assert_eq!(event.source().project_label(), Some("codex-noti"));
-    assert_eq!(
-        event.routing().map(codex_notifier_core::Routing::profile),
-        Some("desktop")
-    );
-    let canonical = String::from_utf8(event.to_json().expect("canonical JSON")).expect("UTF-8");
-    for sensitive in [
-        "<redacted-session-id>",
-        "<redacted-path>",
-        "<redacted-model>",
-        "<redacted-turn-id>",
-        "<redacted-message>",
-    ] {
-        assert!(!canonical.contains(sensitive));
+    assert_eq!(submissions.len(), 2);
+    for event in &submissions {
+        assert_eq!(event.event_id().as_uuid().get_version_num(), 7);
+        assert_eq!(event.source().host_label(), "workstation");
+        assert_eq!(event.source().project_label(), Some("codex-noti"));
+        assert_eq!(
+            event.routing().map(codex_notifier_core::Routing::profile),
+            Some("desktop")
+        );
+        let canonical = String::from_utf8(event.to_json().expect("canonical JSON")).expect("UTF-8");
+        for sensitive in [
+            "<redacted-session-id>",
+            "<redacted-request-id>",
+            "<redacted-path>",
+            "<redacted-model>",
+            "<redacted-turn-id>",
+            "<redacted-message>",
+            "<redacted-command>",
+            "<redacted-environment-id>",
+            "<redacted-amendment>",
+            "acceptWithExecpolicyAmendment",
+        ] {
+            assert!(!canonical.contains(sensitive));
+        }
     }
+    assert!(
+        submissions
+            .iter()
+            .any(|event| event.kind() == EventKind::TaskCompleted)
+    );
+    assert!(
+        submissions
+            .iter()
+            .any(|event| event.kind() == EventKind::ApprovalRequested)
+    );
 
     shutdown_tx.send(()).expect("shutdown");
     runner.await.expect("runner").expect("host run");
@@ -455,14 +507,40 @@ async fn emit_source_and_ipc_failures_remain_distinct() {
         1,
     )
     .expect("short IPC policy");
-    let emitter =
-        TaskCompletedEmitter::new("0.144.5", endpoint, context, short_policy).expect("emitter");
+    let emitter = TaskCompletedEmitter::new("0.144.5", endpoint.clone(), context, short_policy)
+        .expect("emitter");
     assert_eq!(
         emitter.emit(b"{}").await,
         Err(EmitError::Source(SourceError::IncompatiblePayload))
     );
     assert!(matches!(
         emitter.emit(&task_completed_payload()).await,
+        Err(EmitError::Ipc(
+            IpcError::ConnectionFailed | IpcError::Timeout
+        ))
+    ));
+
+    let approval_context =
+        ApprovalRequestedContext::new("workstation", None, None).expect("approval context");
+    assert_eq!(
+        ApprovalRequestedEmitter::new(
+            "0.144.6",
+            endpoint.clone(),
+            approval_context.clone(),
+            short_policy,
+        )
+        .expect_err("unsupported approval version"),
+        EmitError::Source(SourceError::UnsupportedVersion)
+    );
+    let approval =
+        ApprovalRequestedEmitter::new("0.144.5", endpoint, approval_context, short_policy)
+            .expect("approval emitter");
+    assert_eq!(
+        approval.emit(b"{}").await,
+        Err(EmitError::Source(SourceError::IncompatiblePayload))
+    );
+    assert!(matches!(
+        approval.emit(&approval_requested_payload()).await,
         Err(EmitError::Ipc(
             IpcError::ConnectionFailed | IpcError::Timeout
         ))

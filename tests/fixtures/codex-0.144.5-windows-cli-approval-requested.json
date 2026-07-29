@@ -5,6 +5,7 @@
     "interface": "codex app-server",
     "host_os": "Windows 10 Pro 22H2",
     "captured_at": "2026-07-28T17:27:30.047Z",
+    "schema_verified_at": "2026-07-29T02:59:11.190Z",
     "external_process_invoked": true
   },
   "payload": {
@@ -31,11 +32,15 @@
       "threadId": "<redacted-thread-id>",
       "turnId": "<redacted-turn-id>",
       "itemId": "<redacted-item-id>",
+      "startedAtMs": 1785259650047,
+      "environmentId": "<redacted-environment-id>",
       "reason": null,
       "command": "<redacted-command>",
       "cwd": "<redacted-path>",
-      "commandActions": "<redacted-command-actions>",
-      "proposedExecpolicyAmendment": "<redacted-amendment>",
+      "commandActions": [],
+      "proposedExecpolicyAmendment": [
+        "<redacted-amendment>"
+      ],
       "networkApprovalContext": null,
       "availableDecisions": [
         "accept",

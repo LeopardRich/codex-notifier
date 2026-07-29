@@ -3,14 +3,32 @@
 use std::io::Read;
 use std::path::PathBuf;
 
-use codex_notifier::{EmitError, TaskCompletedEmitter};
-use codex_notifier_codex_source::{MAX_TASK_COMPLETED_INPUT_BYTES, TaskCompletedContext};
+use codex_notifier::{ApprovalRequestedEmitter, EmitError, TaskCompletedEmitter};
+use codex_notifier_codex_source::{
+    MAX_APPROVAL_REQUESTED_INPUT_BYTES, MAX_TASK_COMPLETED_INPUT_BYTES, SourceContext,
+};
 use codex_notifier_ipc::{IpcEndpoint, IpcPolicy};
 
 const ARGUMENT_ERROR: &str = "command_arguments_invalid";
 const STDIN_ERROR: &str = "command_stdin_failed";
 
-struct TaskCompletedCommand {
+#[derive(Clone, Copy)]
+enum EmitSource {
+    TaskCompleted,
+    ApprovalRequested,
+}
+
+impl EmitSource {
+    const fn input_limit(self) -> usize {
+        match self {
+            Self::TaskCompleted => MAX_TASK_COMPLETED_INPUT_BYTES,
+            Self::ApprovalRequested => MAX_APPROVAL_REQUESTED_INPUT_BYTES,
+        }
+    }
+}
+
+struct EmitCommand {
+    source: EmitSource,
     codex_version: String,
     state_dir: PathBuf,
     ipc_profile: String,
@@ -52,37 +70,56 @@ async fn main() {
 }
 
 async fn run() -> Result<(), CommandError> {
-    let command = parse_task_completed(std::env::args().skip(1))?;
+    let command = parse_emit(std::env::args().skip(1))?;
     let endpoint = IpcEndpoint::new(command.state_dir.join("run"), command.ipc_profile)
         .map_err(EmitError::from)
         .map_err(CommandError::Emit)?;
-    let context = TaskCompletedContext::new(
+    let context = SourceContext::new(
         command.host_label,
         command.project_label,
         command.routing_profile,
     )
     .map_err(EmitError::from)
     .map_err(CommandError::Emit)?;
-    let emitter = TaskCompletedEmitter::new(
-        &command.codex_version,
-        endpoint,
-        context,
-        IpcPolicy::default(),
-    )
-    .map_err(CommandError::Emit)?;
-    let input = read_stdin()?;
-    emitter.emit(&input).await.map_err(CommandError::Emit)?;
+    let input = read_stdin(command.source.input_limit())?;
+    match command.source {
+        EmitSource::TaskCompleted => {
+            TaskCompletedEmitter::new(
+                &command.codex_version,
+                endpoint,
+                context,
+                IpcPolicy::default(),
+            )
+            .map_err(CommandError::Emit)?
+            .emit(&input)
+            .await
+            .map_err(CommandError::Emit)?;
+        }
+        EmitSource::ApprovalRequested => {
+            ApprovalRequestedEmitter::new(
+                &command.codex_version,
+                endpoint,
+                context,
+                IpcPolicy::default(),
+            )
+            .map_err(CommandError::Emit)?
+            .emit(&input)
+            .await
+            .map_err(CommandError::Emit)?;
+        }
+    }
     Ok(())
 }
 
-fn parse_task_completed(
-    mut arguments: impl Iterator<Item = String>,
-) -> Result<TaskCompletedCommand, CommandError> {
-    if arguments.next().as_deref() != Some("emit")
-        || arguments.next().as_deref() != Some("task-completed")
-    {
+fn parse_emit(mut arguments: impl Iterator<Item = String>) -> Result<EmitCommand, CommandError> {
+    if arguments.next().as_deref() != Some("emit") {
         return Err(CommandError::Arguments);
     }
+    let source = match arguments.next().as_deref() {
+        Some("task-completed") => EmitSource::TaskCompleted,
+        Some("approval-requested") => EmitSource::ApprovalRequested,
+        _ => return Err(CommandError::Arguments),
+    };
 
     let mut codex_version = None;
     let mut state_dir = None;
@@ -106,7 +143,8 @@ fn parse_task_completed(
         }
     }
 
-    Ok(TaskCompletedCommand {
+    Ok(EmitCommand {
+        source,
         codex_version: codex_version.ok_or(CommandError::Arguments)?,
         state_dir: PathBuf::from(state_dir.ok_or(CommandError::Arguments)?),
         ipc_profile: ipc_profile.ok_or(CommandError::Arguments)?,
@@ -116,12 +154,12 @@ fn parse_task_completed(
     })
 }
 
-fn read_stdin() -> Result<Vec<u8>, CommandError> {
+fn read_stdin(maximum: usize) -> Result<Vec<u8>, CommandError> {
     let stdin = std::io::stdin();
     let mut input = Vec::new();
     stdin
         .lock()
-        .take(u64::try_from(MAX_TASK_COMPLETED_INPUT_BYTES + 1).expect("bounded input limit"))
+        .take(u64::try_from(maximum + 1).expect("bounded input limit"))
         .read_to_end(&mut input)
         .map_err(|_| CommandError::Stdin)?;
     Ok(input)

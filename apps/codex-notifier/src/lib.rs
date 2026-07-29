@@ -11,7 +11,8 @@ use codex_notifier_application::{
     EnqueueResult, RoleDeliveryFactory, RuntimeRole, SafeErrorCode, SubmissionOutcome,
 };
 use codex_notifier_codex_source::{
-    CodexCliVersion, CodexInterface, SourceError, TaskCompletedAdapter, TaskCompletedContext,
+    ApprovalRequestedAdapter, ApprovalRequestedContext, CodexCliVersion, CodexInterface,
+    SourceError, TaskCompletedAdapter, TaskCompletedContext,
 };
 use codex_notifier_config::{Config, Role};
 use codex_notifier_core::{CanonicalEvent, EventId};
@@ -28,12 +29,12 @@ const DEFAULT_WORKERS: usize = 4;
 const DATABASE_FILE: &str = "events.sqlite3";
 const INITIAL_RETRY_DELAY_MS: i64 = 250;
 
-/// Safe task-completion emission failures.
+/// Safe Codex event emission failures.
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 #[non_exhaustive]
 pub enum EmitError {
     /// Codex version, interface, payload, or trusted context is incompatible.
-    #[error("Codex task-completion input is incompatible")]
+    #[error("Codex event input is incompatible")]
     Source(#[from] SourceError),
     /// Local agent IPC could not complete safely.
     #[error("local agent submission failed")]
@@ -111,16 +112,71 @@ impl TaskCompletedEmitter {
         let event = self
             .adapter
             .normalize(input, &self.context, EventId::new_v7(), received_at)?;
-        let acknowledgement = self.client.submit(&event).await?;
-        if acknowledgement.status() == AckStatus::Rejected {
-            let error = acknowledgement
-                .error()
-                .cloned()
-                .ok_or(IpcError::MalformedAcknowledgement)?;
-            return Err(EmitError::Rejected(error));
-        }
-        Ok(acknowledgement)
+        submit_event(&self.client, &event).await
     }
+}
+
+/// Fixture-gated Codex approval-request normalizer and local IPC client.
+#[derive(Clone, Debug)]
+pub struct ApprovalRequestedEmitter {
+    adapter: ApprovalRequestedAdapter,
+    context: ApprovalRequestedContext,
+    client: IpcClient,
+}
+
+impl ApprovalRequestedEmitter {
+    /// Selects the exact versioned app-server adapter and local endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EmitError::Source`] when `codex_version` has no verified
+    /// app-server approval-request fixture.
+    pub fn new(
+        codex_version: &str,
+        endpoint: IpcEndpoint,
+        context: ApprovalRequestedContext,
+        ipc_policy: IpcPolicy,
+    ) -> Result<Self, EmitError> {
+        let version = codex_version.parse::<CodexCliVersion>()?;
+        let adapter = ApprovalRequestedAdapter::new(version, CodexInterface::AppServer)?;
+        Ok(Self {
+            adapter,
+            context,
+            client: IpcClient::new(endpoint, ipc_policy),
+        })
+    }
+
+    /// Normalizes one bounded app-server request and submits it locally.
+    ///
+    /// A fresh `UUIDv7` is assigned while the app-server `startedAtMs` value
+    /// supplies the canonical occurrence time.
+    ///
+    /// # Errors
+    ///
+    /// Returns a source compatibility error, local IPC error, or validated
+    /// agent rejection. Command and approval data never enter error text.
+    pub async fn emit(&self, input: &[u8]) -> Result<Acknowledgement, EmitError> {
+        let received_at = OffsetDateTime::now_utc();
+        let event = self
+            .adapter
+            .normalize(input, &self.context, EventId::new_v7(), received_at)?;
+        submit_event(&self.client, &event).await
+    }
+}
+
+async fn submit_event(
+    client: &IpcClient,
+    event: &CanonicalEvent,
+) -> Result<Acknowledgement, EmitError> {
+    let acknowledgement = client.submit(event).await?;
+    if acknowledgement.status() == AckStatus::Rejected {
+        let error = acknowledgement
+            .error()
+            .cloned()
+            .ok_or(IpcError::MalformedAcknowledgement)?;
+        return Err(EmitError::Rejected(error));
+    }
+    Ok(acknowledgement)
 }
 
 /// Stable composition failures that do not expose paths or payloads.

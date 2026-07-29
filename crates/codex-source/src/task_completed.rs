@@ -1,57 +1,19 @@
 //! Strict Codex 0.144.5 `Stop` hook normalization.
 
 use std::collections::BTreeMap;
-use std::fmt::Write as _;
 
 use codex_notifier_core::{
-    CanonicalEvent, EventId, EventKind, EventSource, Extensions, Presentation, Privacy, Routing,
-    Urgency,
+    CanonicalEvent, EventId, EventKind, EventSource, Extensions, Presentation, Privacy, Urgency,
 };
 use serde::{Deserialize, Deserializer};
-use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
-use crate::{CodexCliVersion, CodexInterface, SourceError};
+use crate::{CodexCliVersion, CodexInterface, SourceContext, SourceError, hash_source_id};
 
 /// Maximum accepted bytes for one Codex task-completion hook payload.
 pub const MAX_TASK_COMPLETED_INPUT_BYTES: usize = 32_768;
 const MAX_SOURCE_ID_BYTES: usize = 256;
 const MAX_MODEL_BYTES: usize = 128;
-
-/// Adapter-owned labels and optional route, never values copied from hook cwd.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TaskCompletedContext {
-    host_label: String,
-    project_label: Option<String>,
-    routing: Option<Routing>,
-}
-
-impl TaskCompletedContext {
-    /// Creates validated non-payload source context.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SourceError::InvalidContext`] for invalid display labels or
-    /// routing profiles.
-    pub fn new(
-        host_label: impl Into<String>,
-        project_label: Option<String>,
-        routing_profile: Option<String>,
-    ) -> Result<Self, SourceError> {
-        let host_label = host_label.into();
-        EventSource::new(host_label.clone(), project_label.clone(), None)
-            .map_err(|_| SourceError::InvalidContext)?;
-        let routing = routing_profile
-            .map(Routing::new)
-            .transpose()
-            .map_err(|_| SourceError::InvalidContext)?;
-        Ok(Self {
-            host_label,
-            project_label,
-            routing,
-        })
-    }
-}
 
 /// Fixture-gated task-completion source adapter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -89,7 +51,7 @@ impl TaskCompletedAdapter {
     pub fn normalize(
         self,
         input: &[u8],
-        context: &TaskCompletedContext,
+        context: &SourceContext,
         event_id: EventId,
         received_at: OffsetDateTime,
     ) -> Result<CanonicalEvent, SourceError> {
@@ -103,7 +65,7 @@ impl TaskCompletedAdapter {
         let source = EventSource::new(
             context.host_label.clone(),
             context.project_label.clone(),
-            Some(hash_session_id(&payload.session_id)),
+            Some(hash_source_id(&payload.session_id)),
         )
         .map_err(|_| SourceError::EventBuildFailed)?;
         let presentation = Presentation::new(
@@ -187,14 +149,4 @@ where
 
 fn valid_source_id(value: &str) -> bool {
     !value.is_empty() && value.len() <= MAX_SOURCE_ID_BYTES && !value.chars().any(char::is_control)
-}
-
-fn hash_session_id(value: &str) -> String {
-    let digest = Sha256::digest(value.as_bytes());
-    let mut output = String::with_capacity(71);
-    output.push_str("sha256:");
-    for byte in digest {
-        let _ = write!(output, "{byte:02x}");
-    }
-    output
 }
