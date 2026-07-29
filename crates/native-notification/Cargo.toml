@@ -24,6 +24,7 @@ windows = { workspace = true, features = [
     "Data_Xml_Dom",
     "UI_Notifications",
 ] }
+winreg.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-foundation.workspace = true
