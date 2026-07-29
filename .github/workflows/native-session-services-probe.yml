@@ -901,6 +901,121 @@ jobs:
             2>target/macos-focus-controls-screenshot-error.txt
           cat target/macos-focus-controls.txt
 
+      - name: Exercise Focus suppression
+        if: matrix.scenario == 'grant'
+        id: macos-focus
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          result=0
+          osascript .github/scripts/macos-probe-focus.applescript enable \
+            >target/macos-focus-enable.txt 2>&1
+          if [[ "$?" -ne 0 ]] || \
+            ! grep -q 'focus target=1 .*after=1' target/macos-focus-enable.txt; then
+            result=126
+          fi
+          screencapture -x target/macos-focus-enabled.png \
+            2>target/macos-focus-enabled-screenshot-error.txt
+
+          visible=''
+          if [[ "$result" -eq 0 ]]; then
+            CODEX_NOTIFIER_MACOS_SMOKE_ROOT=/Applications \
+              CODEX_NOTIFIER_MACOS_SIGNING_IDENTITY="$CODEX_NOTIFIER_MACOS_SIGNING_IDENTITY" \
+              cargo test -p codex-notifier-native-notification \
+              --test macos_smoke \
+              submits_notification_under_system_focus \
+              -- --ignored --exact --nocapture \
+              >target/macos-focus-smoke.log 2>&1 &
+            smoke_pid=$!
+
+            for attempt in $(seq 1 40); do
+              osascript >target/macos-focus-ui-current.txt 2>&1 <<'APPLESCRIPT'
+          tell application "System Events"
+              if not (exists application process "NotificationCenter") then
+                  return "visible=0 process-missing"
+              end if
+              set notificationProcess to application process "NotificationCenter"
+              repeat with candidateWindow in windows of notificationProcess
+                  set windowText to ""
+                  set candidateElements to entire contents of candidateWindow
+                  repeat with candidateElement in candidateElements
+                      try
+                          set windowText to windowText & " " & (name of candidateElement as text)
+                      end try
+                      try
+                          set windowText to windowText & " " & (value of candidateElement as text)
+                      end try
+                  end repeat
+                  if windowText contains "Codex Focus suppression probe" then
+                      return "visible=1 text=" & windowText
+                  end if
+              end repeat
+              return "visible=0 windows=" & (count windows of notificationProcess)
+          end tell
+          APPLESCRIPT
+              cat target/macos-focus-ui-current.txt >>target/macos-focus-ui-history.txt
+              if grep -q '^visible=1' target/macos-focus-ui-current.txt; then
+                visible=1
+                screencapture -x target/macos-focus-visible.png \
+                  2>target/macos-focus-visible-screenshot-error.txt
+                break
+              fi
+              if ! kill -0 "$smoke_pid" 2>/dev/null; then
+                break
+              fi
+              sleep 0.25
+            done
+
+            focus_smoke_result=''
+            for attempt in $(seq 1 80); do
+              if ! kill -0 "$smoke_pid" 2>/dev/null; then
+                wait "$smoke_pid"
+                focus_smoke_result=$?
+                break
+              fi
+              sleep 0.25
+            done
+            if [[ -z "$focus_smoke_result" ]]; then
+              kill "$smoke_pid" 2>/dev/null
+              pkill -f codex-notifier-macos-smoke 2>/dev/null
+              wait "$smoke_pid" 2>/dev/null
+              focus_smoke_result=124
+            fi
+            if [[ "$focus_smoke_result" -ne 0 || "$visible" == 1 ]]; then
+              result=127
+            fi
+          else
+            echo 'Focus smoke skipped because Focus could not be enabled' \
+              >target/macos-focus-smoke.log
+          fi
+
+          screencapture -x target/macos-focus-after-delivery.png \
+            2>target/macos-focus-after-delivery-screenshot-error.txt
+          log show --last 3m --style compact \
+            --predicate 'process == "codex-notifier-macos-smoke" OR process == "NotificationCenter" OR process == "usernoted" OR process == "usernotificationsd" OR subsystem CONTAINS "donotdisturb" OR subsystem CONTAINS "UserNotifications"' \
+            >target/macos-focus-unified.log 2>&1 || true
+          focus_event_id='01983c8d-b800-7000-8000-000000000016'
+          if ! grep -q "$focus_event_id" target/macos-focus-unified.log; then
+            result=128
+          fi
+          if grep "$focus_event_id" target/macos-focus-unified.log | \
+            grep -Eq 'Presenting .* as banner|displaying as banner'; then
+            result=129
+          fi
+
+          osascript .github/scripts/macos-probe-focus.applescript disable \
+            >target/macos-focus-disable.txt 2>&1
+          if [[ "$?" -ne 0 ]] || \
+            ! grep -q 'focus target=0 before=1 after=0' target/macos-focus-disable.txt; then
+            result=130
+          fi
+          cat target/macos-focus-enable.txt
+          cat target/macos-focus-ui-history.txt
+          cat target/macos-focus-smoke.log
+          cat target/macos-focus-disable.txt
+          exit "$result"
+
       - name: Exercise explicit authorization denial
         if: matrix.scenario == 'denial'
         id: macos-denial
@@ -1129,6 +1244,10 @@ jobs:
 
       - name: Require macOS grant smoke success
         if: matrix.scenario == 'grant' && steps.macos-smoke.outcome != 'success'
+        run: exit 1
+
+      - name: Require macOS Focus smoke success
+        if: matrix.scenario == 'grant' && steps.macos-focus.outcome != 'success'
         run: exit 1
 
       - name: Require macOS denial smoke success

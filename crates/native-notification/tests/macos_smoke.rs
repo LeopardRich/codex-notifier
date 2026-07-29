@@ -42,15 +42,18 @@ mod macos {
     const SIGNING_KEYCHAIN_ENV: &str = "CODEX_NOTIFIER_MACOS_SIGNING_KEYCHAIN";
     const TEST_NAME: &str = "displays_task_completion_and_approval_request_notifications";
     const DENIAL_TEST_NAME: &str = "reports_real_denied_authorization";
+    const FOCUS_TEST_NAME: &str = "submits_notification_under_system_focus";
     const NO_GUI_TEST_NAME: &str = "reports_real_no_gui_session";
     const EXECUTABLE_NAME: &str = "codex-notifier-macos-smoke";
     const AUTHORIZATION_TIMEOUT: Duration = Duration::from_secs(120);
+    const FOCUS_EVENT_ID: &str = "01983c8d-b800-7000-8000-000000000016";
 
     pub(super) fn run() {
         let arguments = std::env::args().skip(1).collect::<Vec<_>>();
         if arguments.iter().any(|argument| argument == "--list") {
             println!("{TEST_NAME}: test");
             println!("{DENIAL_TEST_NAME}: test");
+            println!("{FOCUS_TEST_NAME}: test");
             println!("{NO_GUI_TEST_NAME}: test");
             println!("reports_real_missing_application_identity: test");
             return;
@@ -62,6 +65,8 @@ mod macos {
             .any(|argument| argument == DENIAL_TEST_NAME)
         {
             reports_real_denied_authorization();
+        } else if arguments.iter().any(|argument| argument == FOCUS_TEST_NAME) {
+            submits_notification_under_system_focus();
         } else if arguments
             .iter()
             .any(|argument| argument == NO_GUI_TEST_NAME)
@@ -150,6 +155,55 @@ mod macos {
             fs::write(path, b"disabled_for_application")
                 .expect("write successful macOS denial result");
         }
+    }
+
+    fn submits_notification_under_system_focus() {
+        if !running_from_application_bundle() {
+            relaunch_in_product_bundle(FOCUS_TEST_NAME, None);
+            return;
+        }
+
+        request_authorization_with_application_run_loop(AuthorizationExpectation::Grant);
+        let backend = Arc::new(MacOsNotificationBackend::codex_notifier());
+        let diagnostic = backend.diagnose();
+        assert_eq!(
+            diagnostic.status(),
+            NotificationStatus::Ready,
+            "macOS Focus smoke diagnostic: {diagnostic:?}"
+        );
+        let adapter = NativeNotificationAdapter::new(
+            backend,
+            NotificationPolicy::new(NotificationContentPolicy::Public, false),
+        );
+        adapter
+            .deliver_now(&focus_event())
+            .expect("macOS accepted the Focus suppression probe");
+        thread::sleep(Duration::from_secs(8));
+        if let Some(path) = std::env::var_os(RESULT_PATH_ENV) {
+            fs::write(path, b"ok").expect("write successful macOS Focus result");
+        }
+    }
+
+    fn focus_event() -> CanonicalEvent {
+        let occurred_at =
+            OffsetDateTime::parse("2026-07-29T06:00:00.000Z", &Rfc3339).expect("valid smoke time");
+        CanonicalEvent::new(
+            EventId::parse(FOCUS_EVENT_ID).expect("UUIDv7 Focus smoke ID"),
+            EventKind::ApprovalRequested,
+            occurred_at,
+            EventSource::new("smoke-test", None, None).expect("safe source"),
+            Presentation::new(
+                "Codex Focus suppression probe",
+                "This notification must remain suppressed by system Focus.",
+                Urgency::High,
+                Privacy::Public,
+            )
+            .expect("safe Focus presentation"),
+            None,
+            Extensions::new(BTreeMap::new()).expect("empty extensions"),
+            occurred_at,
+        )
+        .expect("valid Focus smoke event")
     }
 
     fn reports_real_no_gui_session() {
