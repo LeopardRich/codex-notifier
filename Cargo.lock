@@ -73,6 +73,7 @@ dependencies = [
  "codex-notifier-persistence",
  "codex-notifier-ssh-transport",
  "fastrand",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",

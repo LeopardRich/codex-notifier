@@ -6,7 +6,7 @@
 It turns Codex events that need human attention into native Windows or macOS
 notifications, including events produced by Codex running on a remote server.
 
-> Status: Stages 01-15 are complete: compatibility evidence, architecture
+> Status: Stages 01-16 are complete: compatibility evidence, architecture
 > decisions, the Rust workspace, three-platform quality gates, and the
 > canonical event domain model, layered configuration, and cross-platform path
 > rules are established, together with structured redacted logging and the
@@ -29,8 +29,13 @@ notifications, including events produced by Codex running on a remote server.
 > The restricted SSH `receive` boundary, redacted acknowledgements, dedicated
 > forced-key templates, and SSH security diagnostics are implemented. A real
 > system OpenSSH forced-command session and rejection matrix are verified on a
-> Linux loopback harness; Windows/macOS SSH-server setup remains explicitly
-> unverified and relay sending remains Stage 16 work.
+> Linux loopback harness. The durable relay role now invokes system OpenSSH with
+> fixed arguments, validates bounded acknowledgements, classifies transport and
+> trust failures, and schedules jittered exponential retries with bounded
+> dead letters. The same Linux harness verifies offline queueing, automatic
+> recovery, at-least-once resend, and desktop deduplication. Windows/macOS
+> SSH-server setup remains explicitly unverified; broader diagnostics remain
+> Stage 17 work.
 
 The implementation sequence and acceptance gates are defined in
 [`stages.md`](stages.md).
@@ -271,8 +276,9 @@ The agent role is taken only from validated configuration. Composition binds
 the per-profile IPC endpoint first, then opens the bounded SQLite queue and
 initializes exactly one role adapter graph: `desktop` initializes the native
 notification port but not SSH, while `relay` initializes the SSH delivery port
-but not native notification APIs. Concrete SSH and notification adapters remain
-assigned to later stages.
+but not native notification APIs. The relay port invokes the system OpenSSH
+client with fixed arguments; the desktop port selects only the native adapter
+for the current supported operating system.
 
 Lifecycle state moves monotonically through `starting`, `ready`, `draining`,
 and `stopped`. A local submission is acknowledged only after transactional
@@ -422,7 +428,7 @@ Configuration schema version 1 implements these groups:
 | `agent` | Explicit desktop/relay role, profile, logical IPC endpoint, shutdown timeout. |
 | `codex` | Source-adapter selector and accepted task-completion/approval event kinds. |
 | `desktop` | Quiet-hours behavior and private/public notification content policy. |
-| `relay` | Preconfigured OpenSSH host alias, destination profile, connection timeout. |
+| `relay` | Preconfigured OpenSSH host alias, destination profile, connection timeout, and bounded retry schedule. |
 | `storage` | Absolute state path and bounded queue capacity. |
 | `logging` | Level and absolute log directory; configuration diagnostics are redacted. |
 
@@ -455,8 +461,8 @@ output.
 ## Command Surface
 
 The local desktop lifecycle, two low-level Codex ingestion entries, restricted
-SSH receiver, and focused capability/security checks are implemented. Relay
-sending and broader diagnostics retain their planned responsibilities:
+SSH receiver, durable relay sender, and focused capability/security checks are
+implemented. Broader diagnostics retain their planned responsibilities:
 
 | Command | Availability | Purpose |
 | --- | --- | --- |
@@ -464,7 +470,7 @@ sending and broader diagnostics retain their planned responsibilities:
 | `emit approval-requested` | Implemented | Bounded local ingestion for a verified app-server command-approval request. |
 | `doctor codex` | Implemented | Read-only version/interface capability and installation reporting. |
 | `doctor ssh` | Implemented | Read-only host-key enrollment and authorized-file permission reporting. |
-| `agent` | Implemented for desktop | Run the configured per-user desktop process. |
+| `agent` | Implemented for desktop and relay | Run the configured per-user role process. |
 | `receive` | Implemented | Accept exactly one bounded canonical event from a restricted SSH session and forward it over local IPC. |
 | `install` / `uninstall` | Implemented for desktop | Reversibly manage the verified Codex hook and per-user Windows/macOS startup artifacts. |
 | Other `doctor` checks | Planned | Report broader agent, IPC, storage, and notification status. |
@@ -538,6 +544,59 @@ verification, Windows/macOS permission rules, diagnostic meanings, and
 reversible removal are documented in
 [`docs/restricted-ssh.md`](docs/restricted-ssh.md). The project never changes a
 user's SSH configuration or key files automatically.
+
+### Relay SSH delivery
+
+Stage 16 adds the source-built relay agent path. A relay configuration uses a
+fixed system OpenSSH host alias and bounded delivery policy:
+
+```toml
+config_version = 1
+
+[agent]
+role = "relay"
+profile = "default"
+
+[relay]
+ssh_host_alias = "codex-notifier-desktop"
+connect_timeout_ms = 10000
+retry_initial_delay_ms = 1000
+retry_max_delay_ms = 60000
+retry_max_attempts = 20
+```
+
+Run `codex-notifier agent` under the remote user's session or service manager.
+The existing `emit` commands submit to its local IPC endpoint exactly as they
+do for a desktop role. Linux relay archives and a managed systemd user service
+remain Stage 19 packaging work; no Linux notification adapter is created.
+
+For every leased event, the relay starts the system `ssh` executable with a
+fixed argument array. It forces batch mode, no PTY, no agent or configured port
+forwarding, one connection attempt, strict host-key checking, and the exact
+remote command `codex-notifier receive`. The canonical event is written only
+to stdin. Stdout is limited to the 2,048-byte acknowledgement bound and stderr
+to 8 KiB; neither diagnostic content nor event data is logged.
+
+A matching `accepted`, `duplicate`, or `delivered` acknowledgement commits the
+relay receipt and removes the outbox payload. Retryable receiver failures,
+network loss, connection timeout, missing OpenSSH, and generic process failures
+remain queued. Authentication failure, changed/untrusted host key, malformed or
+mismatched acknowledgement, oversized output, and non-retryable receiver
+rejection become metadata-only dead letters. The receiver's bounded retry flag
+is preserved without retaining its message.
+
+Retries use exponential base delays with random jitter between 75 and 100
+percent of each interval, capped by `retry_max_delay_ms`. Configuration accepts
+initial delays from 100 to 60,000 ms, maximum delays from 100 to 3,600,000 ms,
+1 to 1,000 attempts, and connection timeouts from 100 to 120,000 ms. Defaults are
+1 second, 60 seconds, 20 attempts, and 10 seconds. A future-dated retry wakes
+without a new IPC submission, including after agent restart; reaching the age
+or attempt bound cannot consume queue resources indefinitely.
+
+Setup, host-key enrollment, source-built operation, error meanings, recovery,
+and reversible removal are documented in
+[`docs/relay-ssh.md`](docs/relay-ssh.md). The executed evidence is in
+[`docs/verification/stage-16.md`](docs/verification/stage-16.md).
 
 ### Codex event emit
 

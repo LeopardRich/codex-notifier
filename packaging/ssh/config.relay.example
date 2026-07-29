@@ -4,6 +4,9 @@ Host codex-notifier-desktop
     User DESKTOP_USER
     IdentityFile ~/.ssh/codex-notifier-desktop
     IdentitiesOnly yes
+    BatchMode yes
+    NumberOfPasswordPrompts 0
+    ConnectionAttempts 1
     StrictHostKeyChecking yes
     UserKnownHostsFile ~/.ssh/known_hosts
     RequestTTY no

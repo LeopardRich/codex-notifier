@@ -419,26 +419,39 @@ impl SqliteStore {
         count_table(&self.connection, "outbox")
     }
 
-    /// Returns when the earliest queued or recoverable leased event can be
-    /// leased, expressed as Unix milliseconds.
+    /// Returns when queued state next needs lease, recovery, or age-limit
+    /// maintenance, expressed as Unix milliseconds.
     ///
     /// # Errors
     ///
     /// Returns a corruption or classified database failure for invalid state.
-    pub fn next_available_at_ms(&self, now_ms: i64) -> Result<Option<i64>, PersistenceError> {
-        self.connection
+    pub fn next_wake_at_ms(&self, now_ms: i64) -> Result<Option<i64>, PersistenceError> {
+        let age = i64::try_from(self.policy.event_age_ms())
+            .map_err(|_| PersistenceError::InvalidValue)?;
+        let (available, expiration): (Option<i64>, Option<i64>) = self
+            .connection
             .query_row(
-                "SELECT MIN(
-                    CASE
+                "SELECT
+                    MIN(CASE
                         WHEN state = 'leased' AND lease_until_ms > ?1
                             THEN max(available_at_ms, lease_until_ms)
                         ELSE available_at_ms
-                    END
-                 ) FROM outbox",
-                [now_ms],
-                |row| row.get(0),
+                    END),
+                    MIN(CASE
+                        WHEN state = 'leased' AND lease_until_ms > ?1
+                            THEN max(occurred_at_ms + ?2 + 1, lease_until_ms)
+                        ELSE occurred_at_ms + ?2 + 1
+                    END)
+                 FROM outbox",
+                params![now_ms, age],
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .map_err(map_sqlite_error)
+            .map_err(map_sqlite_error)?;
+        Ok(match (available, expiration) {
+            (Some(available), Some(expiration)) => Some(available.min(expiration)),
+            (Some(value), None) | (None, Some(value)) => Some(value),
+            (None, None) => None,
+        })
     }
 
     /// Returns the number of retained delivery receipts.
@@ -648,14 +661,17 @@ fn maintain(
         .execute(
             "INSERT OR IGNORE INTO dead_letters(event_id, kind, error_code, failed_at_ms)
              SELECT event_id, kind, 'event_expired', ?1 FROM outbox
-             WHERE occurred_at_ms < ?2",
+             WHERE occurred_at_ms < ?2
+               AND (state = 'queued' OR lease_until_ms <= ?1)",
             params![now_ms, event_cutoff],
         )
         .map_err(map_sqlite_error)?;
     transaction
         .execute(
-            "DELETE FROM outbox WHERE occurred_at_ms < ?1",
-            [event_cutoff],
+            "DELETE FROM outbox
+             WHERE occurred_at_ms < ?1
+               AND (state = 'queued' OR lease_until_ms <= ?2)",
+            params![event_cutoff, now_ms],
         )
         .map_err(map_sqlite_error)?;
     transaction

@@ -216,23 +216,19 @@ fn retries_schedule_then_dead_letter_at_the_attempt_limit() {
 }
 
 #[test]
-fn next_availability_tracks_queued_retries_and_lease_recovery() {
+fn next_wake_tracks_queued_retries_and_lease_recovery() {
     let policy = StorePolicy::default()
         .with_lease_duration_ms(1_000)
         .expect("lease policy");
     let mut store = SqliteStore::open_in_memory(policy).expect("memory store");
     assert_eq!(
-        store
-            .next_available_at_ms(NOW_MS)
-            .expect("empty availability"),
+        store.next_wake_at_ms(NOW_MS).expect("empty availability"),
         None
     );
     let fixture = event(ID_1, EventKind::TaskCompleted, NOW_MS - 1_000);
     store.enqueue(&fixture, NOW_MS).expect("enqueue");
     assert_eq!(
-        store
-            .next_available_at_ms(NOW_MS)
-            .expect("queued availability"),
+        store.next_wake_at_ms(NOW_MS).expect("queued availability"),
         Some(NOW_MS)
     );
     store
@@ -240,7 +236,7 @@ fn next_availability_tracks_queued_retries_and_lease_recovery() {
         .expect("lease")
         .expect("event");
     assert_eq!(
-        store.next_available_at_ms(NOW_MS).expect("lease recovery"),
+        store.next_wake_at_ms(NOW_MS).expect("lease recovery"),
         Some(NOW_MS + 1_000)
     );
     store
@@ -253,10 +249,70 @@ fn next_availability_tracks_queued_retries_and_lease_recovery() {
         )
         .expect("retry");
     assert_eq!(
-        store
-            .next_available_at_ms(NOW_MS)
-            .expect("retry availability"),
+        store.next_wake_at_ms(NOW_MS).expect("retry availability"),
         Some(NOW_MS + 2_000)
+    );
+}
+
+#[test]
+fn age_maintenance_wakes_early_without_deleting_an_active_lease() {
+    let policy = StorePolicy::default()
+        .with_max_event_age_ms(1_500)
+        .expect("age policy")
+        .with_lease_duration_ms(1_000)
+        .expect("lease policy");
+    let fixture = event(ID_1, EventKind::TaskCompleted, NOW_MS - 1_000);
+    let mut leased = SqliteStore::open_in_memory(policy).expect("leased store");
+    leased.enqueue(&fixture, NOW_MS).expect("enqueue leased");
+    leased
+        .lease_next(NOW_MS, "lease-active")
+        .expect("active lease")
+        .expect("event");
+    assert!(
+        leased
+            .lease_next(NOW_MS + 501, "lease-other")
+            .expect("maintenance during lease")
+            .is_none()
+    );
+    assert_eq!(leased.queue_len().expect("leased row retained"), 1);
+    assert_eq!(
+        leased.next_wake_at_ms(NOW_MS + 501).expect("lease wake"),
+        Some(NOW_MS + 1_000)
+    );
+    assert!(
+        leased
+            .lease_next(NOW_MS + 1_000, "lease-expired")
+            .expect("expired maintenance")
+            .is_none()
+    );
+    assert_eq!(leased.queue_len().expect("expired row removed"), 0);
+    assert_eq!(
+        leased
+            .dead_letter_entry(fixture.event_id())
+            .expect("expired dead letter")
+            .expect("expired metadata")
+            .error_code(),
+        "event_expired"
+    );
+
+    let mut queued = SqliteStore::open_in_memory(policy).expect("queued store");
+    queued.enqueue(&fixture, NOW_MS).expect("enqueue queued");
+    queued
+        .lease_next(NOW_MS, "lease-retry")
+        .expect("retry lease")
+        .expect("event");
+    queued
+        .retry(
+            fixture.event_id(),
+            "lease-retry",
+            NOW_MS,
+            NOW_MS + 1_000,
+            "ssh_network_unavailable",
+        )
+        .expect("future retry");
+    assert_eq!(
+        queued.next_wake_at_ms(NOW_MS).expect("age-first wake"),
+        Some(NOW_MS + 501)
     );
 }
 

@@ -117,8 +117,8 @@ synthetic tests, upgrade, and uninstall on Windows and macOS.
 - Codex CLI approval hook installation remains unavailable because no verified
   CLI `PermissionRequest` fixture exists. The app-server approval adapter and
   explicit local test event do not change that installation claim.
-- SSH receive and relay delivery are not implemented and remain Stage 15 and
-  Stage 16 work.
+- SSH receive and relay delivery were outside Stage 14 and are now covered by
+  the Stage 15 and Stage 16 verification records.
 
 ## Completion decision
 

@@ -8,3 +8,6 @@ sensitive-field checks, and redacted diagnostic summaries.
 
 The state-directory writability check is an injected interface so validation
 tests do not depend on the test host's accounts or filesystem permissions.
+Relay settings include a fixed OpenSSH alias and connection timeout plus
+bounded initial delay, maximum delay, and attempt-count controls for durable
+exponential retry.

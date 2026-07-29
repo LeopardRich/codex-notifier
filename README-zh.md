@@ -6,7 +6,7 @@
 Codex 事件转换为 Windows 或 macOS 原生系统通知，并支持 Codex 运行在远程
 服务器上的场景。
 
-> 当前状态：阶段 01-15 已完成，兼容性证据、架构决策、Rust workspace、三平台
+> 当前状态：阶段 01-16 已完成，兼容性证据、架构决策、Rust workspace、三平台
 > 质量门禁、规范事件领域模型、分层配置、跨平台路径规则与结构化脱敏日志模型均已
 > 建立，事务性 SQLite 发件箱/去重存储、有界的用户级本地 IPC、角色感知 agent
 > 生命周期、持久背压和有界 worker 排空也已完成；Codex CLI 0.144.5 的 CLI
@@ -20,8 +20,11 @@ Codex 事件转换为 Windows 或 macOS 原生系统通知，并支持 Codex 运
 > hook 与用户级自启动资源、运行 agent、查看状态、提交两类显式测试事件、幂等升级，
 > 并在保留事件状态与用户修改的前提下卸载自有资源。受限 SSH `receive` 边界、脱敏
 > 确认、专用 forced-key 模板和 SSH 安全诊断均已实现；真实系统 OpenSSH forced-command
-> 会话与拒绝矩阵已在 Linux loopback 测试架构中验证，Windows/macOS SSH 服务端配置
-> 仍明确标记为未验证，中继发送仍属于阶段 16。
+> 会话与拒绝矩阵已在 Linux loopback 测试架构中验证。持久中继角色现会以固定参数
+> 调用系统 OpenSSH、校验有界确认、分类传输/信任故障，并通过带抖动的指数退避和
+> 有界死信完成重试。同一 Linux 测试架构已验证离线排队、自动恢复、至少一次重发与
+> 桌面端去重。Windows/macOS SSH 服务端配置仍明确标记为未验证；更完整诊断仍属于
+> 阶段 17。
 
 实施顺序与各阶段验收门槛见 [`stages.md`](stages.md)。
 
@@ -242,8 +245,8 @@ sequenceDiagram
 
 agent 角色只来自经过校验的配置。组合层先绑定配置档专属 IPC 端点，再打开有界
 SQLite 队列，并且只初始化一套角色适配器：`desktop` 初始化原生通知端口而不初始化
-SSH，`relay` 初始化 SSH 投递端口而不初始化原生通知 API。具体 SSH 与通知适配器
-仍属于后续阶段。
+SSH，`relay` 初始化 SSH 投递端口而不初始化原生通知 API。中继端口以固定参数调用
+系统 OpenSSH 客户端；桌面端口只选择当前受支持操作系统的原生通知适配器。
 
 生命周期只按 `starting`、`ready`、`draining`、`stopped` 的顺序前进。本地提交
 只有在事务性入队后才会确认，重复事件 ID 使用独立确认状态。持久队列本身就是背压
@@ -358,7 +361,7 @@ macOS 14.8.7 与 macOS 26.4 的真实托管 runner 检查已执行首次授权�
 | `agent` | 显式桌面端/中继端角色、配置档、逻辑 IPC 端点和关闭超时。 |
 | `codex` | 事件源适配器选择以及接受的任务完成/审批请求事件类型。 |
 | `desktop` | 免打扰行为以及私密/公开通知内容策略。 |
-| `relay` | 预配置的 OpenSSH 主机别名、目标配置档和连接超时。 |
+| `relay` | 预配置的 OpenSSH 主机别名、目标配置档、连接超时和有界重试计划。 |
 | `storage` | 绝对状态路径和有界队列容量。 |
 | `logging` | 日志级别和绝对日志目录；配置诊断信息会脱敏。 |
 
@@ -384,8 +387,8 @@ Windows 上的用户配置与状态遵循 `%APPDATA%` 和 `%LOCALAPPDATA%`，mac
 
 ## 命令界面
 
-本地桌面端生命周期、两类低级 Codex 事件入口、受限 SSH 接收端以及聚焦的能力/
-安全检查已经实现；中继发送与更完整的诊断命令仍保留规划职责：
+本地桌面端生命周期、两类低级 Codex 事件入口、受限 SSH 接收端、持久中继发送端
+以及聚焦的能力/安全检查已经实现；更完整的诊断命令仍保留规划职责：
 
 | 命令 | 可用性 | 用途 |
 | --- | --- | --- |
@@ -393,7 +396,7 @@ Windows 上的用户配置与状态遵循 `%APPDATA%` 和 `%LOCALAPPDATA%`，mac
 | `emit approval-requested` | 已实现 | 接收已验证 app-server 命令审批请求的有界本地事件入口。 |
 | `doctor codex` | 已实现 | 只读报告版本/界面能力与安装选择。 |
 | `doctor ssh` | 已实现 | 只读报告主机密钥登记与授权文件权限。 |
-| `agent` | 桌面端已实现 | 运行已配置的用户级桌面端进程。 |
+| `agent` | 桌面端与中继端已实现 | 运行已配置的用户级角色进程。 |
 | `receive` | 已实现 | 从受限 SSH 会话接收一个有界规范事件，并通过本地 IPC 转交。 |
 | `install` / `uninstall` | 桌面端已实现 | 可逆地管理已验证 Codex hook 与 Windows/macOS 用户级自启动产物。 |
 | 其他 `doctor` 检查 | 规划中 | 报告更完整的 agent、IPC、存储与通知状态。 |
@@ -455,6 +458,51 @@ UUIDv7 响应关联 ID。合法展示字段中的 Shell 元字符始终只是 JS
 强制主机密钥校验、Windows/macOS 权限规则、诊断状态含义与可逆移除步骤见
 [`docs/restricted-ssh.md`](docs/restricted-ssh.md)。本项目不会自动修改用户的 SSH
 配置或密钥文件。
+
+### 中继 SSH 投递
+
+阶段 16 增加基于源码运行的中继 agent 路径。中继配置使用固定的系统 OpenSSH
+主机别名和有界投递策略：
+
+```toml
+config_version = 1
+
+[agent]
+role = "relay"
+profile = "default"
+
+[relay]
+ssh_host_alias = "codex-notifier-desktop"
+connect_timeout_ms = 10000
+retry_initial_delay_ms = 1000
+retry_max_delay_ms = 60000
+retry_max_attempts = 20
+```
+
+在远程用户会话或服务管理器中运行 `codex-notifier agent`。现有 `emit` 命令与桌面
+角色一样向其本地 IPC 端点提交事件。Linux relay 归档和受管理的 systemd 用户服务
+仍属于阶段 19 的打包工作；本阶段没有增加 Linux 通知适配器。
+
+对每个取得租约的事件，中继都会以固定参数数组启动系统 `ssh` 可执行文件。它强制
+批处理模式、无 PTY、无 agent 转发或配置端口转发、单次连接尝试、严格主机密钥
+校验，以及精确远程命令 `codex-notifier receive`。规范事件只写入 stdin。stdout
+受 2,048 字节确认上限约束，stderr 上限为 8 KiB；诊断内容和事件数据都不会进入日志。
+
+事件 ID 匹配的 `accepted`、`duplicate` 或 `delivered` 确认会提交中继回执并删除
+发件箱载荷。可重试的接收端故障、断网、连接超时、OpenSSH 缺失和通用进程故障会
+继续排队。认证失败、主机密钥变化/不受信任、确认格式错误或 ID 不匹配、输出超限，
+以及不可重试的接收端拒绝会变为只含元数据的死信。接收端的有界 retry 标志会保留，
+但其消息不会被存储。
+
+重试采用指数基准延迟，并在基准的 75% 至 100% 之间加入随机抖动，最终受
+`retry_max_delay_ms` 限制。初始延迟允许 100 至 60,000 毫秒，最大延迟允许 100 至
+3,600,000 毫秒，尝试次数允许 1 至 1,000，连接超时允许 100 至 120,000 毫秒。
+默认值依次为 1 秒、60 秒、20 次和 10 秒。未来可用的重试无需新的 IPC 提交即可
+唤醒，agent 重启后也相同；达到年龄或次数上限后不会无限占用队列资源。
+
+设置、主机密钥登记、源码运行、错误含义、恢复和可逆移除步骤见
+[`docs/relay-ssh.md`](docs/relay-ssh.md)，执行证据见
+[`docs/verification/stage-16.md`](docs/verification/stage-16.md)。
 
 ### Codex 事件 emit
 

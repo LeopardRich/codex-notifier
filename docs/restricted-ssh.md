@@ -99,8 +99,9 @@ entry. Other results are `missing`, `insecure`, or `unavailable`.
 
 ## 5. Exercise and revoke
 
-Stage 16 will own normal queued sending. A controlled Stage 15 probe requests
-the exact remote command and sends one canonical JSON envelope through stdin:
+Stage 16 normal queued sending uses this same boundary. A controlled probe
+requests the exact remote command and sends one canonical JSON envelope through
+stdin:
 
 ```text
 ssh codex-notifier-desktop "codex-notifier receive"
@@ -110,6 +111,10 @@ The response is one compact protocol-v1 acknowledgement. Valid events retain
 their event ID. If the input is invalid before an ID can be trusted, the
 rejection contains a fresh UUIDv7 correlation ID and a fixed safe error. No
 payload, path, key, or stack trace is returned.
+
+Relay role configuration, bounded retry policy, failure classifications,
+offline recovery, and source-built operation are documented separately in
+[`relay-ssh.md`](relay-ssh.md).
 
 To revoke access, remove only this dedicated public-key line from the active
 authorized-key file and delete the relay private/public key pair. Remove the

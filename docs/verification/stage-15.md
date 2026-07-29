@@ -109,9 +109,9 @@ security diagnostics.
   network session or changing SSH state. The actual OpenSSH connection remains
   responsible for detecting a changed live host key.
 - Relay outbox sending, OpenSSH client process delivery, retry/backoff, and
-  remote error classification remain Stage 16. No embedded server, reverse
-  tunnel, Linux notification adapter, firewall change, or hosted relay was
-  added.
+  remote error classification were outside Stage 15 and are now covered by
+  [`stage-16.md`](stage-16.md). Neither stage added an embedded server, reverse
+  tunnel, Linux notification adapter, firewall change, or hosted relay.
 
 ## Completion decision
 

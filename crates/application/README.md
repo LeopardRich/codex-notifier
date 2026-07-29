@@ -13,4 +13,7 @@ fields in the model at any log level.
 
 The runtime initializes exactly one desktop or relay delivery graph, accepts
 events only while ready, and uses the durable queue as its backpressure boundary
-instead of creating an in-memory task per event.
+instead of creating an in-memory task per event. Queue adapters can report the
+next durable availability time, so delayed retries and expired leases wake the
+worker set without a new submission. Retry transitions distinguish a scheduled
+attempt from attempt exhaustion that has already produced a dead letter.

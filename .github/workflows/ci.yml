@@ -51,7 +51,7 @@ jobs:
           sudo usermod --password "$account_hash" "$USER"
           unset account_hash
 
-      - name: Verify restricted receive through real OpenSSH
+      - name: Verify restricted receive and relay through real OpenSSH
         if: matrix.target == 'linux-relay'
         env:
           CODEX_NOTIFIER_OPENSSH_TEST: '1'

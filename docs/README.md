@@ -9,6 +9,10 @@ behavior remains documented in both root README files.
   acknowledgement wire contract.
 - [`threat-model.md`](threat-model.md): assets, boundaries, mitigations, and
   residual risks.
+- [`restricted-ssh.md`](restricted-ssh.md): dedicated-key desktop receiver
+  setup, security checks, and revocation.
+- [`relay-ssh.md`](relay-ssh.md): source-built relay configuration, delivery,
+  retry recovery, and removal.
 - [`decisions/`](decisions/): accepted architecture decisions.
 - [`verification/`](verification/): stage evidence and explicitly unverified
   platform checks.

@@ -316,7 +316,9 @@ impl AgentHost {
         let mut store_policy =
             StorePolicy::default().with_queue_limit(config.storage().max_queue_entries())?;
         let retry_schedule = if role == RuntimeRole::Relay {
-            store_policy = store_policy.with_max_attempts(config.relay().retry_max_attempts())?;
+            store_policy = store_policy
+                .with_lease_duration_ms(config.relay().connect_timeout_ms().saturating_add(10_000))?
+                .with_max_attempts(config.relay().retry_max_attempts())?;
             RetrySchedule::new(
                 config.relay().retry_initial_delay_ms(),
                 config.relay().retry_max_delay_ms(),
@@ -523,7 +525,7 @@ impl AgentQueue for SqliteAgentQueue {
     fn next_wake(&self) -> Result<Option<Duration>, AgentQueueError> {
         let now = now_ms();
         self.lock()?
-            .next_available_at_ms(now)
+            .next_wake_at_ms(now)
             .map_err(|error| map_persistence_error(&error))
             .map(|available| {
                 available.map(|available| {
