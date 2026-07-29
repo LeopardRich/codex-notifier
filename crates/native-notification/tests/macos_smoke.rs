@@ -38,6 +38,7 @@ mod macos {
     const RESULT_PATH_ENV: &str = "CODEX_NOTIFIER_MACOS_SMOKE_RESULT";
     const SMOKE_ROOT_ENV: &str = "CODEX_NOTIFIER_MACOS_SMOKE_ROOT";
     const SIGNING_IDENTITY_ENV: &str = "CODEX_NOTIFIER_MACOS_SIGNING_IDENTITY";
+    const SIGNING_KEYCHAIN_ENV: &str = "CODEX_NOTIFIER_MACOS_SIGNING_KEYCHAIN";
     const TEST_NAME: &str = "displays_task_completion_and_approval_request_notifications";
     const NO_GUI_TEST_NAME: &str = "reports_real_no_gui_session";
     const EXECUTABLE_NAME: &str = "codex-notifier-macos-smoke";
@@ -241,9 +242,14 @@ mod macos {
 
         let signing_identity =
             std::env::var(SIGNING_IDENTITY_ENV).unwrap_or_else(|_| "-".to_owned());
-        let signed = Command::new("/usr/bin/codesign")
+        let mut signing_command = Command::new("/usr/bin/codesign");
+        signing_command
             .args(["--force", "--sign"])
-            .arg(&signing_identity)
+            .arg(&signing_identity);
+        if let Some(keychain) = std::env::var_os(SIGNING_KEYCHAIN_ENV) {
+            signing_command.arg("--keychain").arg(keychain);
+        }
+        let signed = signing_command
             .args(["--identifier", CODEX_NOTIFIER_BUNDLE_ID])
             .arg(&bundle)
             .status()

@@ -256,7 +256,7 @@ jobs:
                     keybd_event(0x5B, 0, 2, UIntPtr.Zero);
                 }
             }
-            '@
+          '@
             [ProbeNotificationCenter]::Toggle()
             Start-Sleep -Seconds 2
             Save-ProbeScreen 'target\windows11-notification-center.png'
@@ -491,9 +491,6 @@ jobs:
             -k "$keychain" \
             -P "$keychain_password" \
             -T /usr/bin/codesign
-          security add-trusted-cert -r trustRoot \
-            -k "$keychain" \
-            "$signing_directory/root.pem"
           security set-key-partition-list \
             -S apple-tool:,apple: \
             -s \
@@ -502,10 +499,14 @@ jobs:
           security list-keychains -d user -s "$keychain" "$login_keychain"
 
           security find-identity -v -p codesigning "$keychain" \
-            >target/macos-signing-identities.txt
-          identity=$(awk -v name="$identity_name" \
-            'index($0, "\"" name "\"") { print $2; exit }' \
-            target/macos-signing-identities.txt)
+            >target/macos-signing-identities.txt || true
+          security find-certificate -a -Z -c "$identity_name" "$keychain" \
+            >target/macos-signing-keychain-certificate.txt
+          identity=$(/usr/bin/openssl x509 \
+            -in "$signing_directory/leaf.pem" \
+            -noout \
+            -fingerprint \
+            -sha1 | cut -d= -f2 | tr -d ':')
           if [[ -z "$identity" ]]; then
             cat target/macos-signing-identities.txt
             exit 1
