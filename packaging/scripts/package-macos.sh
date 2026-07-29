@@ -18,7 +18,7 @@ identity=$7
 for path in "$binary" "$notices" "$sbom" LICENSE packaging/macos/generate-icon.swift; do
     [[ -f $path ]] || { echo "missing release input" >&2; exit 2; }
 done
-lipo -verify_arch x86_64 arm64 "$binary"
+lipo "$binary" -verify_arch x86_64 arm64
 
 if [[ $identity == "-" ]]; then
     signature_mode=ad-hoc-verification

@@ -285,7 +285,7 @@ jobs:
             target/x86_64-apple-darwin/release/codex-notifier \
             target/aarch64-apple-darwin/release/codex-notifier \
             -output universal/codex-notifier
-          lipo -verify_arch x86_64 arm64 universal/codex-notifier
+          lipo universal/codex-notifier -verify_arch x86_64 arm64
 
       - name: Import protected Apple release identity
         if: startsWith(github.ref, 'refs/tags/v')

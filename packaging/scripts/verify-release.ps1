@@ -99,7 +99,7 @@ try {
         if ($SignatureMode -eq 'unsigned-verification' -and $signature.Status -ne 'NotSigned') { throw 'verification archive is not explicitly unsigned' }
     }
     elseif ($Package -eq 'macos-universal') {
-        & lipo -verify_arch x86_64 arm64 $executable
+        & lipo $executable -verify_arch x86_64 arm64
         if ($LASTEXITCODE -ne 0) { throw 'packaged macOS executable is not universal' }
         & codesign --verify --deep --strict --verbose=2 $root
         if ($LASTEXITCODE -ne 0) { throw 'packaged macOS signature is invalid' }
