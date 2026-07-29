@@ -48,6 +48,7 @@ uuid = { version = "1.16.0", features = ["v7"] }
 usernotifications-rs = "=0.2.0"
 widestring = "1.2.0"
 windows = "0.61.3"
+winreg = "0.56.0"
 
 [workspace.dependencies.tempfile]
 version = "3.20.0"

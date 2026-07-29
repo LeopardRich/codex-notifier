@@ -9,6 +9,7 @@ use windows::UI::Notifications::{
     ToastNotifier,
 };
 use windows::core::{HRESULT, HSTRING};
+use winreg::{RegKey, enums::HKEY_CURRENT_USER};
 
 use crate::{
     FocusStatus, NotificationBackend, NotificationDiagnostic, NotificationError,
@@ -20,6 +21,7 @@ use codex_notifier_core::Urgency;
 pub const CODEX_NOTIFIER_APP_ID: &str = "LeopardRich.CodexNotifier";
 const MAX_APP_ID_BYTES: usize = 128;
 const ERROR_NOT_FOUND_HRESULT: i32 = -2_147_023_728;
+const APP_ID_REGISTRY_PREFIX: &str = r"Software\Classes\AppUserModelId";
 
 /// Strict Windows application user model identifier.
 #[derive(Clone, Eq, PartialEq)]
@@ -66,6 +68,7 @@ impl fmt::Debug for WindowsApplicationId {
 pub struct WindowsNotificationBackend {
     application_id: WindowsApplicationId,
     session: SessionStatus,
+    registration: ApplicationRegistrationStatus,
 }
 
 impl WindowsNotificationBackend {
@@ -75,9 +78,11 @@ impl WindowsNotificationBackend {
     /// by [`NotificationBackend::diagnose`] before a delivery is accepted.
     #[must_use]
     pub fn new(application_id: WindowsApplicationId) -> Self {
+        let registration = current_application_registration_status(&application_id);
         Self {
             application_id,
             session: current_session_status(),
+            registration,
         }
     }
 
@@ -95,6 +100,15 @@ impl WindowsNotificationBackend {
             }
             SessionStatus::Unknown => return Err(NotificationError::Unavailable),
         }
+        match self.registration {
+            ApplicationRegistrationStatus::Registered => {}
+            ApplicationRegistrationStatus::Missing => {
+                return Err(NotificationError::ApplicationIdentityMissing);
+            }
+            ApplicationRegistrationStatus::Unknown => {
+                return Err(NotificationError::Unavailable);
+            }
+        }
         ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(
             self.application_id.as_str(),
         ))
@@ -103,10 +117,10 @@ impl WindowsNotificationBackend {
 
     fn ready_notifier(&self) -> Result<ToastNotifier, NotificationError> {
         let notifier = self.notifier()?;
-        let setting = notifier
-            .Setting()
-            .map_err(|error| map_query_error(error.code()))?;
-        setting_error(setting)?;
+        match notifier.Setting() {
+            Ok(setting) => setting_error(setting)?,
+            Err(error) => setting_query_error(error.code(), self.registration)?,
+        }
         Ok(notifier)
     }
 }
@@ -194,6 +208,19 @@ fn setting_error(setting: NotificationSetting) -> Result<(), NotificationError> 
     }
 }
 
+const fn setting_query_error(
+    code: HRESULT,
+    registration: ApplicationRegistrationStatus,
+) -> Result<(), NotificationError> {
+    if code.0 == ERROR_NOT_FOUND_HRESULT
+        && matches!(registration, ApplicationRegistrationStatus::Registered)
+    {
+        Ok(())
+    } else {
+        Err(map_query_error(code))
+    }
+}
+
 const fn map_query_error(code: HRESULT) -> NotificationError {
     if code.0 == ERROR_NOT_FOUND_HRESULT {
         NotificationError::ApplicationIdentityMissing
@@ -226,6 +253,27 @@ enum SessionStatus {
     Interactive,
     NonInteractive,
     Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ApplicationRegistrationStatus {
+    Registered,
+    Missing,
+    Unknown,
+}
+
+fn current_application_registration_status(
+    application_id: &WindowsApplicationId,
+) -> ApplicationRegistrationStatus {
+    let current_user = RegKey::predef(HKEY_CURRENT_USER);
+    let path = format!(r"{APP_ID_REGISTRY_PREFIX}\{}", application_id.as_str());
+    match current_user.open_subkey(path) {
+        Ok(_) => ApplicationRegistrationStatus::Registered,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            ApplicationRegistrationStatus::Missing
+        }
+        Err(_) => ApplicationRegistrationStatus::Unknown,
+    }
 }
 
 fn current_session_status() -> SessionStatus {
@@ -340,6 +388,20 @@ mod tests {
         assert_eq!(
             map_query_error(HRESULT(ERROR_NOT_FOUND_HRESULT)),
             NotificationError::ApplicationIdentityMissing
+        );
+        assert_eq!(
+            setting_query_error(
+                HRESULT(ERROR_NOT_FOUND_HRESULT),
+                ApplicationRegistrationStatus::Registered,
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            setting_query_error(
+                HRESULT(ERROR_NOT_FOUND_HRESULT),
+                ApplicationRegistrationStatus::Missing,
+            ),
+            Err(NotificationError::ApplicationIdentityMissing)
         );
         assert_eq!(
             map_query_error(HRESULT(-2_147_467_259)),
