@@ -8,5 +8,28 @@ license.workspace = true
 [lib]
 path = "src/lib.rs"
 
+[dependencies]
+codex-notifier-application = { path = "../application" }
+codex-notifier-core = { path = "../core" }
+thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+sysinfo.workspace = true
+windows = { workspace = true, features = [
+    "Data_Xml_Dom",
+    "UI_Notifications",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-foundation.workspace = true
+rustix.workspace = true
+usernotifications-rs.workspace = true
+
+[dev-dependencies]
+time.workspace = true
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true

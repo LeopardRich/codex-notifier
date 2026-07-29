@@ -6,15 +6,20 @@
 It turns Codex events that need human attention into native Windows or macOS
 notifications, including events produced by Codex running on a remote server.
 
-> Status: Stages 01-10 are complete: compatibility evidence, architecture
+> Status: Stages 01-11 are complete: compatibility evidence, architecture
 > decisions, the Rust workspace, three-platform quality gates, and the
 > canonical event domain model, layered configuration, and cross-platform path
 > rules are established, together with structured redacted logging and the
 > transactional SQLite outbox/deduplication store and bounded per-user local
 > IPC. The role-aware agent lifecycle, durable backpressure, and bounded worker
-> drain are also complete. The exact Codex CLI 0.144.5 `Stop` hook adapter and
-> bounded task-completion `emit` path are implemented. Approval ingestion, SSH,
-> and native notification adapters have not been implemented yet.
+> drain are also complete. Exact Codex CLI 0.144.5 adapters now cover the CLI
+> `Stop` hook and app-server command-approval request, with bounded local
+> `emit` paths and read-only capability reporting. The Windows WinRT adapter,
+> policy mapping, diagnostics, and automated contracts are implemented, but a
+> product-identity Toast smoke test is still unverified. The macOS
+> UserNotifications adapter, bundle contract, authorization diagnostics, and
+> automated contracts are implemented in the Stage 13 tree; final macOS CI and
+> real notification tests are still pending. SSH has not been implemented yet.
 
 The implementation sequence and acceptance gates are defined in
 [`stages.md`](stages.md).
@@ -64,9 +69,10 @@ can differ by Codex version and interface.
 | Product event | Required Codex capability | Current behavior |
 | --- | --- | --- |
 | Task completed | An external notification/hook event for turn completion | Implemented for the exact Codex CLI 0.144.5 CLI `Stop` hook shape; normalize and enqueue `task_completed`. |
-| Approval requested | An external notification/hook event for an approval request | Normalize the payload and enqueue `approval_requested`; report the feature as unavailable when the installed Codex version does not expose it. |
+| Approval requested | An external notification/hook event for an approval request | Implemented for the exact Codex CLI 0.144.5 app-server `item/commandExecution/requestApproval` request; the ordinary CLI hook remains unverified. |
 
-The implementation must detect capabilities during `doctor` and installation.
+The read-only `doctor codex` command and future installer use the same
+fixture-gated capability report as adapter selection.
 It must not scrape terminal output or private session logs as a silent fallback.
 Adapter contracts are gated by sanitized real-event fixtures for each exact
 Codex version and interface. This repository intentionally does not claim that
@@ -291,6 +297,61 @@ agent restarts cannot exhaust delivery retries.
 - Notification API success means the OS accepted the notification, not that the
   user saw or opened it.
 
+### Windows native notifications
+
+The Windows adapter is compiled only under `cfg(windows)` and uses the
+`windows-rs` WinRT Toast API. Private policy always renders the fixed text from
+ADR-0003. Public text requires both explicit application policy and a canonical
+event marked public. Native text is independently control-filtered and bounded;
+Toast XML is built with DOM nodes, not string interpolation. Application quiet
+hours suppress popup and audio while retaining notification-center delivery.
+Version 1 emits no actions, launch URI, reply field, command, or remote approval
+control.
+
+The backend validates the product AUMID `LeopardRich.CodexNotifier`, rejects
+Session 0, and distinguishes missing identity, per-application disablement,
+global user disablement, group-policy disablement, API unavailability, and
+delivery rejection. Windows Focus Assist and Do Not Disturb remain
+operating-system policy; diagnostics report `system_managed` rather than
+claiming an unsupported active-state probe. The package resource and reversible
+ownership contract is recorded in
+[`packaging/windows/README.md`](packaging/windows/README.md).
+
+The adapter's automated contracts pass on Windows 10 22H2. A temporary
+per-user unpackaged-app registration using the product AUMID passed the ignored
+two-event smoke test: WinRT accepted both real Toasts. User visual confirmation,
+Windows 11 smoke testing, and real system-setting state checks remain
+outstanding. See
+[`docs/verification/stage-12.md`](docs/verification/stage-12.md).
+
+### macOS native notifications
+
+The macOS adapter is compiled only under `cfg(target_os = "macos")` and uses
+Apple's modern UserNotifications framework through safe Rust bindings. It
+requires the signed application bundle identifier
+`io.github.leopardrich.codex-notifier`, verifies that the executable is running
+from that `.app`, and requires the current user's Aqua launch domain. A
+read-only diagnostic distinguishes missing identity, authorization not yet
+requested, explicit denial or application disablement, no GUI session, and
+native API unavailability. Authorization is requested only through an explicit
+method; displaying an event never opens a permission prompt.
+
+The shared privacy and text-bounding policy is applied before UserNotifications
+is called. Each request uses the canonical event ID and contains title/body
+only: no category, action, URL, reply field, command, or user-info payload.
+Normal delivery uses the default sound and active interruption level;
+application quiet hours omit sound and use the passive level. The adapter never
+uses time-sensitive or critical levels, so macOS Focus and Do Not Disturb remain
+authoritative and diagnostics report `system_managed`.
+
+The bundle, Developer ID signing, notarization, and Aqua LaunchAgent resource
+contract is recorded in
+[`packaging/macos/README.md`](packaging/macos/README.md). An ignored smoke test
+self-bundles and ad-hoc signs the test executable, explicitly requests
+authorization, and submits both event kinds. Real visual confirmation on macOS
+14 and the latest supported macOS remains unverified; see
+[`docs/verification/stage-13.md`](docs/verification/stage-13.md).
+
 ## Security Model
 
 The trust boundary is the desktop `receive` command.
@@ -356,20 +417,22 @@ output.
 
 ## Command Surface
 
-Only the low-level task-completion ingestion entry is implemented at Stage 10.
-The remaining commands retain their planned responsibilities:
+The two low-level Codex ingestion entries and the Codex capability check are
+implemented. The remaining commands retain their planned responsibilities:
 
 | Command | Availability | Purpose |
 | --- | --- | --- |
 | `emit task-completed` | Implemented | Codex-facing, bounded local ingestion for the verified `Stop` payload. |
+| `emit approval-requested` | Implemented | Bounded local ingestion for a verified app-server command-approval request. |
+| `doctor codex` | Implemented | Read-only version/interface capability and installation reporting. |
 | `agent` | Planned | Run the per-user desktop or relay process. |
 | `receive` | Planned | Restricted SSH-facing ingestion on the desktop. |
 | `install` / `uninstall` | Planned | Manage Codex integration and user startup artifacts. |
-| `doctor` | Planned | Run read-only capability and connectivity checks. |
+| Other `doctor` checks | Planned | Report agent, IPC, storage, SSH, and notification status. |
 | `test` | Planned | Send an explicit synthetic notification or end-to-end test event. |
 | `status` | Planned | Show agent, queue, and last-delivery status without event content. |
 
-### Task-completion emit
+### Codex event emit
 
 The Stage 10 executable entry reads one raw Codex `Stop` hook JSON object from
 stdin and accepts at most 32 KiB. Its current low-level invocation is:
@@ -384,6 +447,29 @@ the hook working directory. The command accepts only the exact verified
 version, reports source compatibility separately from IPC failures, and emits
 no payload text. Stage 14 remains responsible for installing this invocation
 into Codex configuration; Stage 10 does not modify user hooks.
+
+The approval entry accepts one raw
+`item/commandExecution/requestApproval` JSON-RPC request from the verified
+app-server interface with the same bounded endpoint/context options:
+
+```text
+codex-notifier emit approval-requested --codex-version 0.144.5 --state-dir <absolute-state-directory> --ipc-profile <agent-ipc-profile> --host-label <display-label> [--project-label <display-label>] [--routing-profile <profile>]
+```
+
+This command only emits a display-only notification event. The app-server
+client remains responsible for replying to Codex through its existing approval
+UI; `codex-notifier` does not approve, decline, execute, or expose the command.
+Stage 14 remains responsible for installing a complete integration.
+
+The minimal read-only capability check is:
+
+```text
+codex-notifier doctor codex --codex-version 0.144.5 --interface <cli-hook|app-server>
+```
+
+It reports stable support and installation states without reading transcripts,
+terminal output, credentials, or user configuration. Unknown version text is
+not echoed. Broader diagnostics remain assigned to Stage 17.
 
 ## Repository Layout
 

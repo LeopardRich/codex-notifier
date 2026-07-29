@@ -6,9 +6,14 @@ desktop/relay configuration into the application runtime, converts submissions
 to structured acknowledgements, and coordinates IPC shutdown with bounded
 worker drain.
 
-Stage 10 adds the bounded `emit task-completed` stdin entry. It accepts only the
-fixture-verified Codex CLI 0.144.5 `Stop` hook shape, creates a fresh `UUIDv7`,
-normalizes private display content, and submits the event through the same
-per-profile local IPC endpoint. Source compatibility, IPC, and structured agent
-rejections retain distinct safe error codes. Other command parsing remains
-assigned to later ingestion, diagnostics, and installation stages.
+Stages 10-11 add bounded `emit task-completed` and `emit approval-requested`
+stdin entries. They accept only fixture-verified Codex CLI 0.144.5 shapes,
+create a fresh `UUIDv7`, normalize private display content, and submit through
+the same per-profile local IPC endpoint. Source compatibility, IPC, and
+structured agent rejections retain distinct safe error codes.
+
+The minimal `doctor codex` command reports the same version/interface
+capability and installation selection used by the adapters. Approval events are
+display-only: no response decision, command, arguments, action URL, or remote
+approval behavior is exposed. Broader command parsing remains assigned to
+later diagnostics and installation stages.

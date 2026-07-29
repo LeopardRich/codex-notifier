@@ -6,12 +6,15 @@
 Codex 事件转换为 Windows 或 macOS 原生系统通知，并支持 Codex 运行在远程
 服务器上的场景。
 
-> 当前状态：阶段 01-10 已完成，兼容性证据、架构决策、Rust workspace、三平台
+> 当前状态：阶段 01-11 已完成，兼容性证据、架构决策、Rust workspace、三平台
 > 质量门禁、规范事件领域模型、分层配置、跨平台路径规则与结构化脱敏日志模型均已
 > 建立，事务性 SQLite 发件箱/去重存储、有界的用户级本地 IPC、角色感知 agent
-> 生命周期、持久背压和有界 worker 排空也已完成；精确适配 Codex CLI 0.144.5
-> `Stop` hook 的事件源与有界任务完成 `emit` 路径已经实现。审批接入、SSH 与原生
-> 通知适配器尚未实现。
+> 生命周期、持久背压和有界 worker 排空也已完成；Codex CLI 0.144.5 的 CLI
+> `Stop` hook 与 app-server 命令审批请求均已有精确适配器、有界本地 `emit` 路径和
+> 只读能力报告。Windows WinRT 适配器、策略映射、诊断与自动化契约已经实现，但
+> 产品身份 Toast 的真实冒烟测试仍未验证。阶段 13 工作树已实现 macOS
+> UserNotifications 适配器、应用包契约、授权诊断与自动化契约，但最终 macOS CI
+> 和真实通知测试仍待完成。SSH 尚未实现。
 
 实施顺序与各阶段验收门槛见 [`stages.md`](stages.md)。
 
@@ -60,9 +63,10 @@ Codex 的事件能力可能随版本和使用界面而变化，因此所有集�
 | 产品事件 | 所需 Codex 能力 | 当前行为 |
 | --- | --- | --- |
 | 任务完成 | 可供外部程序调用的轮次完成通知或 hook 事件 | 已按 Codex CLI 0.144.5 的 CLI `Stop` hook 精确结构实现，规范化并入队为 `task_completed`。 |
-| 请求审批 | 可供外部程序调用的审批请求通知或 hook 事件 | 规范化载荷并入队为 `approval_requested`；若当前 Codex 版本未暴露该事件，则明确报告功能不可用。 |
+| 请求审批 | 可供外部程序调用的审批请求通知或 hook 事件 | 已按 Codex CLI 0.144.5 app-server 的 `item/commandExecution/requestApproval` 请求精确实现；普通 CLI hook 仍未验证。 |
 
-实现阶段必须在安装与 `doctor` 诊断中检测这些能力。项目不得把抓取终端输出或
+只读 `doctor codex` 与未来 installer 使用和实际适配器选择相同的 fixture 门禁能力
+报告。项目不得把抓取终端输出或
 读取私有会话日志作为静默降级方案。每个精确 Codex 版本和使用界面的适配器契约
 都必须由脱敏后的真实事件 fixture 提供门禁；本项目目前不承诺所有 Codex 版本都能
 向外部程序暴露上述两类事件。
@@ -260,6 +264,46 @@ SSH，`relay` 初始化 SSH 投递端口而不初始化原生通知 API。具体
   或展示正文，schema 迁移失败会保持源事务不变。
 - 系统通知 API 返回成功只代表操作系统接受了通知，不代表用户已经看到或打开。
 
+### Windows 原生通知
+
+Windows 适配器只在 `cfg(windows)` 下编译，并使用 `windows-rs` WinRT Toast API。
+私密策略始终显示 ADR-0003 的固定文案；公开文案同时要求应用显式配置和规范事件标记
+为公开。原生文本会再次过滤控制字符并限制长度，Toast XML 使用 DOM 节点构造而不做
+字符串插值。应用免打扰会抑制弹窗和声音，但仍把通知交给通知中心。版本 1 不包含
+动作、启动 URI、回复框、命令或远程审批控制。
+
+后端校验产品 AUMID `LeopardRich.CodexNotifier`，拒绝 Session 0，并分别诊断身份
+缺失、应用级关闭、用户全局关闭、组策略关闭、API 不可用和投递拒绝。Windows
+专注助手与勿扰仍由操作系统管理；诊断报告 `system_managed`，不声称能够读取公开
+Toast API 没有暴露的活动状态。打包资源和可回滚所有权契约见
+[`packaging/windows/README.md`](packaging/windows/README.md)。
+
+适配器自动化契约已在 Windows 10 22H2 通过。使用产品 AUMID 创建临时的当前用户
+非打包应用注册后，被忽略的双事件冒烟测试已经通过，WinRT 接受了两条真实 Toast。
+用户视觉确认、Windows 11 冒烟测试和真实系统设置状态检查仍未完成。详见
+[`docs/verification/stage-12.md`](docs/verification/stage-12.md)。
+
+### macOS 原生通知
+
+macOS 适配器只在 `cfg(target_os = "macos")` 下编译，通过安全 Rust 绑定调用 Apple
+现代 UserNotifications 框架。它要求签名应用包使用固定标识
+`io.github.leopardrich.codex-notifier`，校验可执行文件确实从该 `.app` 内运行，并
+要求当前用户存在 Aqua launch domain。只读诊断会区分应用身份缺失、尚未请求授权、
+明确拒绝或应用级关闭、无 GUI 会话以及原生 API 不可用。授权只能通过显式方法请求；
+事件投递本身不会弹出权限请求。
+
+共享的隐私与文本长度策略会在调用 UserNotifications 之前执行。每个请求使用规范事件
+ID，且只包含标题和正文，不含 category、动作、URL、回复框、命令或 user-info 载荷。
+常规投递使用默认声音和 active interruption level；应用免打扰会移除声音并使用
+passive level。适配器绝不使用会绕过专注模式的 time-sensitive 或 critical level，
+因此 macOS 专注与勿扰始终优先，诊断报告 `system_managed`。
+
+应用包、Developer ID 签名、公证与 Aqua LaunchAgent 的资源契约见
+[`packaging/macos/README.md`](packaging/macos/README.md)。被忽略的冒烟测试会自行
+构造并临时签名测试应用包，显式请求授权，然后提交两类事件。macOS 14 与最新支持
+版本上的真实视觉确认仍未验证；详见
+[`docs/verification/stage-13.md`](docs/verification/stage-13.md)。
+
 ## 安全模型
 
 桌面端 `receive` 命令是主要信任边界。
@@ -315,19 +359,21 @@ Windows 上的用户配置与状态遵循 `%APPDATA%` 和 `%LOCALAPPDATA%`，mac
 
 ## 命令界面
 
-阶段 10 仅实现了低级任务完成接入命令，其余命令仍保留规划职责：
+两类低级 Codex 事件入口和 Codex 能力检查已经实现，其余命令仍保留规划职责：
 
 | 命令 | 可用性 | 用途 |
 | --- | --- | --- |
 | `emit task-completed` | 已实现 | 面向 Codex、接收已验证 `Stop` 载荷的有界本地事件入口。 |
+| `emit approval-requested` | 已实现 | 接收已验证 app-server 命令审批请求的有界本地事件入口。 |
+| `doctor codex` | 已实现 | 只读报告版本/界面能力与安装选择。 |
 | `agent` | 规划中 | 运行桌面端或中继端用户级进程。 |
 | `receive` | 规划中 | 桌面端面向受限 SSH 的事件入口。 |
 | `install` / `uninstall` | 规划中 | 管理 Codex 集成与用户自启动产物。 |
-| `doctor` | 规划中 | 执行只读能力与连通性检查。 |
+| 其他 `doctor` 检查 | 规划中 | 报告 agent、IPC、存储、SSH 与通知状态。 |
 | `test` | 规划中 | 显式发送模拟通知或端到端测试事件。 |
 | `status` | 规划中 | 显示 agent、队列与最近投递状态，不展示事件正文。 |
 
-### 任务完成 emit
+### Codex 事件 emit
 
 阶段 10 的可执行入口从 stdin 读取一个原始 Codex `Stop` hook JSON 对象，上限为
 32 KiB。当前低级调用形式为：
@@ -340,6 +386,26 @@ codex-notifier emit task-completed --codex-version 0.144.5 --state-dir <绝对�
 安装参数，绝不从 hook 工作目录复制。命令只接受精确验证过的版本，分别报告事件源
 兼容性错误与 IPC 错误，且不输出载荷正文。把该调用安装进 Codex 配置仍属于阶段 14；
 阶段 10 不修改用户 hook。
+
+审批入口使用相同的有界端点与可信上下文参数，读取一个来自已验证 app-server
+界面的原始 `item/commandExecution/requestApproval` JSON-RPC 请求：
+
+```text
+codex-notifier emit approval-requested --codex-version 0.144.5 --state-dir <绝对状态目录> --ipc-profile <agent-ipc-profile> --host-label <展示标签> [--project-label <展示标签>] [--routing-profile <profile>]
+```
+
+该命令只产生仅供展示的通知事件。app-server 客户端仍需通过原有审批 UI 向 Codex
+回复；`codex-notifier` 不会批准、拒绝、执行或展示待执行命令。完整安装接入仍属于
+阶段 14。
+
+当前最小只读能力检查为：
+
+```text
+codex-notifier doctor codex --codex-version 0.144.5 --interface <cli-hook|app-server>
+```
+
+它不读取 transcript、终端输出、凭据或用户配置，也不会回显未知版本文本。更完整的
+诊断仍属于阶段 17。
 
 ## 仓库结构
 
