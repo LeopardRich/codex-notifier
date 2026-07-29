@@ -42,3 +42,14 @@ pub enum CodexInterface {
     /// JSON-RPC app-server interface.
     AppServer,
 }
+
+impl CodexInterface {
+    /// Returns the stable machine-readable interface name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CliHook => "cli_hook",
+            Self::AppServer => "app_server",
+        }
+    }
+}

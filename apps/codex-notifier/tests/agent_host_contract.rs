@@ -314,6 +314,22 @@ async fn run_emit_child(event_name: &str, payload: &[u8], directory: &TempDir, i
     );
 }
 
+fn doctor_output(version: &str, interface: &str) -> String {
+    let output = Command::new(env!("CARGO_BIN_EXE_codex-notifier"))
+        .args([
+            "doctor",
+            "codex",
+            "--codex-version",
+            version,
+            "--interface",
+            interface,
+        ])
+        .output()
+        .expect("doctor child");
+    assert!(output.status.success());
+    String::from_utf8(output.stdout).expect("doctor UTF-8")
+}
+
 #[derive(Clone, Copy)]
 struct WritableProbe;
 
@@ -545,6 +561,29 @@ async fn emit_source_and_ipc_failures_remain_distinct() {
             IpcError::ConnectionFailed | IpcError::Timeout
         ))
     ));
+}
+
+#[test]
+fn doctor_codex_matches_capability_and_installation_selection() {
+    let app_server = doctor_output("0.144.5", "app-server");
+    assert!(app_server.contains("codex_version=0.144.5"));
+    assert!(app_server.contains("interface=app_server"));
+    assert!(app_server.contains("task_completed=unsupported_interface"));
+    assert!(app_server.contains("approval_requested=supported"));
+    assert!(app_server.contains("approval_installation=configure_app_server"));
+    assert!(app_server.contains("display-only"));
+
+    let cli_hook = doctor_output("0.144.5", "cli-hook");
+    assert!(cli_hook.contains("task_completed=supported"));
+    assert!(cli_hook.contains("approval_requested=unverified"));
+    assert!(cli_hook.contains("approval_installation=report_unavailable"));
+    assert!(cli_hook.contains("no approval hook will be installed"));
+
+    let unknown = doctor_output("sensitive-unknown-version", "app-server");
+    assert!(unknown.contains("codex_version=unsupported"));
+    assert!(unknown.contains("approval_requested=unsupported_version"));
+    assert!(unknown.contains("approval_installation=report_unavailable"));
+    assert!(!unknown.contains("sensitive-unknown-version"));
 }
 
 #[tokio::test]

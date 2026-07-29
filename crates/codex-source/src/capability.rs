@@ -39,6 +39,17 @@ pub enum ApprovalInstallation {
     ReportUnavailable,
 }
 
+impl ApprovalInstallation {
+    /// Returns the stable machine-readable installation action.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ConfigureAppServer => "configure_app_server",
+            Self::ReportUnavailable => "report_unavailable",
+        }
+    }
+}
+
 /// Read-only capability result shared by future installer and doctor commands.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CodexCapabilityReport {

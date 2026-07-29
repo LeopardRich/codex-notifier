@@ -5,7 +5,8 @@ use std::path::PathBuf;
 
 use codex_notifier::{ApprovalRequestedEmitter, EmitError, TaskCompletedEmitter};
 use codex_notifier_codex_source::{
-    MAX_APPROVAL_REQUESTED_INPUT_BYTES, MAX_TASK_COMPLETED_INPUT_BYTES, SourceContext,
+    CodexCapabilityReport, CodexCliVersion, CodexInterface, MAX_APPROVAL_REQUESTED_INPUT_BYTES,
+    MAX_TASK_COMPLETED_INPUT_BYTES, SourceContext,
 };
 use codex_notifier_ipc::{IpcEndpoint, IpcPolicy};
 
@@ -35,6 +36,16 @@ struct EmitCommand {
     host_label: String,
     project_label: Option<String>,
     routing_profile: Option<String>,
+}
+
+struct DoctorCommand {
+    codex_version: String,
+    interface: CodexInterface,
+}
+
+enum Command {
+    Emit(EmitCommand),
+    Doctor(DoctorCommand),
 }
 
 enum CommandError {
@@ -70,7 +81,16 @@ async fn main() {
 }
 
 async fn run() -> Result<(), CommandError> {
-    let command = parse_emit(std::env::args().skip(1))?;
+    match parse_command(std::env::args().skip(1))? {
+        Command::Emit(command) => run_emit(command).await,
+        Command::Doctor(command) => {
+            run_doctor(&command);
+            Ok(())
+        }
+    }
+}
+
+async fn run_emit(command: EmitCommand) -> Result<(), CommandError> {
     let endpoint = IpcEndpoint::new(command.state_dir.join("run"), command.ipc_profile)
         .map_err(EmitError::from)
         .map_err(CommandError::Emit)?;
@@ -111,10 +131,31 @@ async fn run() -> Result<(), CommandError> {
     Ok(())
 }
 
-fn parse_emit(mut arguments: impl Iterator<Item = String>) -> Result<EmitCommand, CommandError> {
-    if arguments.next().as_deref() != Some("emit") {
-        return Err(CommandError::Arguments);
+fn run_doctor(command: &DoctorCommand) {
+    let report = CodexCapabilityReport::inspect(&command.codex_version, command.interface);
+    let version = report
+        .version()
+        .map(CodexCliVersion::as_str)
+        .unwrap_or("unsupported");
+    println!(
+        "codex_version={version}\ninterface={}\ntask_completed={}\napproval_requested={}\napproval_installation={}\napproval_notice={}",
+        report.interface().as_str(),
+        report.task_completed().as_str(),
+        report.approval_requested().as_str(),
+        report.approval_installation().as_str(),
+        report.approval_installation_notice(),
+    );
+}
+
+fn parse_command(mut arguments: impl Iterator<Item = String>) -> Result<Command, CommandError> {
+    match arguments.next().as_deref() {
+        Some("emit") => parse_emit(arguments).map(Command::Emit),
+        Some("doctor") => parse_doctor(arguments).map(Command::Doctor),
+        _ => Err(CommandError::Arguments),
     }
+}
+
+fn parse_emit(mut arguments: impl Iterator<Item = String>) -> Result<EmitCommand, CommandError> {
     let source = match arguments.next().as_deref() {
         Some("task-completed") => EmitSource::TaskCompleted,
         Some("approval-requested") => EmitSource::ApprovalRequested,
@@ -151,6 +192,36 @@ fn parse_emit(mut arguments: impl Iterator<Item = String>) -> Result<EmitCommand
         host_label: host_label.ok_or(CommandError::Arguments)?,
         project_label,
         routing_profile,
+    })
+}
+
+fn parse_doctor(
+    mut arguments: impl Iterator<Item = String>,
+) -> Result<DoctorCommand, CommandError> {
+    if arguments.next().as_deref() != Some("codex") {
+        return Err(CommandError::Arguments);
+    }
+    let mut codex_version = None;
+    let mut interface = None;
+    while let Some(flag) = arguments.next() {
+        let value = arguments.next().ok_or(CommandError::Arguments)?;
+        let target = match flag.as_str() {
+            "--codex-version" => &mut codex_version,
+            "--interface" => &mut interface,
+            _ => return Err(CommandError::Arguments),
+        };
+        if target.replace(value).is_some() {
+            return Err(CommandError::Arguments);
+        }
+    }
+    let interface = match interface.as_deref() {
+        Some("cli-hook") => CodexInterface::CliHook,
+        Some("app-server") => CodexInterface::AppServer,
+        _ => return Err(CommandError::Arguments),
+    };
+    Ok(DoctorCommand {
+        codex_version: codex_version.ok_or(CommandError::Arguments)?,
+        interface,
     })
 }
 
