@@ -144,6 +144,12 @@ impl CancellationToken {
     }
 }
 
+impl Default for CancellationToken {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Result of transactionally accepting an event into the durable queue.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EnqueueResult {

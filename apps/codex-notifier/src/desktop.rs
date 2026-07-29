@@ -7,7 +7,7 @@ use std::sync::Arc;
 use codex_notifier_application::{AgentError, EventDelivery, RoleDeliveryFactory};
 use codex_notifier_config::{
     CliOverrides, Config, ConfigError, ConfigLoader, ConfigPaths, FileSystemStateProbe,
-    NotificationPrivacy, PathEnvironment, Platform, Role,
+    NotificationPrivacy, PathEnvironment, Platform, Role, StateDirectoryProbe,
 };
 use codex_notifier_core::{
     CanonicalEvent, EventId, EventKind, EventSource, Extensions, Presentation, Privacy, Urgency,
@@ -130,7 +130,19 @@ pub fn current_config_paths() -> Result<ConfigPaths, DesktopError> {
 /// Returns a stable file or configuration error without logging file content.
 pub fn load_current_config() -> Result<(ConfigPaths, Config), DesktopError> {
     let paths = current_config_paths()?;
-    let config = load_config(&paths, true)?;
+    let config = load_config(&paths, true, &FileSystemStateProbe)?;
+    Ok((paths, config))
+}
+
+/// Loads current-user configuration without writing to the state directory.
+///
+/// # Errors
+///
+/// Returns a stable file or semantic configuration error. State-directory
+/// availability is intentionally inspected by the diagnostic storage check.
+pub fn load_current_config_read_only() -> Result<(ConfigPaths, Config), DesktopError> {
+    let paths = current_config_paths()?;
+    let config = load_config(&paths, true, &PassiveStateProbe)?;
     Ok((paths, config))
 }
 
@@ -140,7 +152,16 @@ pub fn load_current_config() -> Result<(ConfigPaths, Config), DesktopError> {
 ///
 /// Returns a stable file or configuration error.
 pub fn load_config_or_defaults(paths: &ConfigPaths) -> Result<Config, DesktopError> {
-    load_config(paths, false)
+    load_config(paths, false, &FileSystemStateProbe)
+}
+
+/// Loads existing configuration or defaults without filesystem writes.
+///
+/// # Errors
+///
+/// Returns a stable file or semantic configuration error.
+pub fn load_config_or_defaults_read_only(paths: &ConfigPaths) -> Result<Config, DesktopError> {
+    load_config(paths, false, &PassiveStateProbe)
 }
 
 /// Runs the configured desktop agent until an operating-system stop signal.
@@ -174,6 +195,19 @@ pub async fn submit_local_test(kind: EventKind) -> Result<(EventId, AckStatus), 
         .submit(&event)
         .await?;
     Ok((event_id, acknowledgement.status()))
+}
+
+/// Connects to the configured same-user IPC endpoint without sending an event.
+///
+/// # Errors
+///
+/// Returns a stable endpoint, connection, identity, or timeout failure.
+pub async fn probe_local_ipc(config: &Config) -> Result<(), DesktopError> {
+    let endpoint = endpoint_for(config)?;
+    IpcClient::new(endpoint, IpcPolicy::default())
+        .probe()
+        .await
+        .map_err(DesktopError::from)
 }
 
 /// Submits one already validated remote event to the configured local agent.
@@ -474,7 +508,11 @@ fn read_bounded(path: &Path) -> Result<String, DesktopError> {
     fs::read_to_string(path).map_err(|_| DesktopError::ConfigFile)
 }
 
-fn load_config(paths: &ConfigPaths, required: bool) -> Result<Config, DesktopError> {
+fn load_config(
+    paths: &ConfigPaths,
+    required: bool,
+    state_probe: &dyn StateDirectoryProbe,
+) -> Result<Config, DesktopError> {
     let input = match read_bounded(paths.config_file()) {
         Ok(value) => Some(value),
         Err(DesktopError::ConfigFile) if !required && !paths.config_file().exists() => None,
@@ -485,9 +523,17 @@ fn load_config(paths: &ConfigPaths, required: bool) -> Result<Config, DesktopErr
         input.as_deref(),
         None,
         CliOverrides::new(),
-        &FileSystemStateProbe,
+        state_probe,
     )
     .map_err(DesktopError::from)
+}
+
+struct PassiveStateProbe;
+
+impl StateDirectoryProbe for PassiveStateProbe {
+    fn is_writable(&self, _path: &Path) -> bool {
+        true
+    }
 }
 
 fn required_env(name: &str) -> Result<PathBuf, DesktopError> {
@@ -586,5 +632,37 @@ mod tests {
             9
         });
         assert_eq!(timed_out, None);
+    }
+
+    #[test]
+    fn read_only_config_loading_does_not_create_state() {
+        let directory = TempDir::new().expect("temporary directory");
+        let home = directory.path().join("home");
+        fs::create_dir_all(&home).expect("home");
+        #[cfg(windows)]
+        let paths = PathEnvironment::new()
+            .with_home(&home)
+            .with_windows_app_data(directory.path().join("roaming"))
+            .with_windows_local_app_data(directory.path().join("local"))
+            .resolve(Platform::Windows)
+            .expect("Windows paths");
+        #[cfg(target_os = "macos")]
+        let paths = PathEnvironment::new()
+            .with_home(&home)
+            .resolve(Platform::MacOs)
+            .expect("macOS paths");
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let paths = PathEnvironment::new()
+            .with_home(&home)
+            .with_xdg_config_home(directory.path().join("config"))
+            .with_xdg_state_home(directory.path().join("state"))
+            .resolve(Platform::Xdg)
+            .expect("XDG paths");
+        assert!(!paths.state_dir().exists());
+
+        let config = load_config_or_defaults_read_only(&paths).expect("read-only defaults");
+
+        assert_eq!(config.storage().state_dir(), paths.state_dir());
+        assert!(!paths.state_dir().exists());
     }
 }

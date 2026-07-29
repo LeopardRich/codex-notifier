@@ -52,6 +52,19 @@ fn endpoint() -> (TempDir, IpcEndpoint) {
     (directory, endpoint)
 }
 
+#[tokio::test]
+async fn health_probe_connects_without_submitting_an_event_frame() {
+    let (_directory, endpoint) = endpoint();
+    let server = IpcServer::bind(endpoint.clone(), IpcPolicy::default()).expect("server");
+
+    IpcClient::new(endpoint, IpcPolicy::default())
+        .probe()
+        .await
+        .expect("same-user health probe");
+
+    drop(server);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn valid_event_completes_structured_acknowledgement() {
     let (_directory, endpoint) = endpoint();

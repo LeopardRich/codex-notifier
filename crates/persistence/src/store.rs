@@ -7,13 +7,14 @@ use std::time::Duration;
 use codex_notifier_core::{CanonicalEvent, EventId, EventKind};
 use rusqlite::ffi::ErrorCode as SqliteErrorCode;
 use rusqlite::{
-    Connection, Error as SqliteError, OptionalExtension, Transaction, TransactionBehavior, params,
+    Connection, Error as SqliteError, OpenFlags, OptionalExtension, Transaction,
+    TransactionBehavior, params,
 };
 use time::OffsetDateTime;
 
 use crate::{
     DeadLetter, EnqueueOutcome, LeasedEvent, PersistenceError, ReceiptOutcome, RetryOutcome,
-    StorePolicy,
+    StorePolicy, StoreSnapshot, StoredEventState,
 };
 
 /// Current on-disk `SQLite` schema version.
@@ -84,6 +85,90 @@ impl SqliteStore {
     pub fn open_in_memory(policy: StorePolicy) -> Result<Self, PersistenceError> {
         let connection = Connection::open_in_memory().map_err(map_sqlite_error)?;
         Self::initialize(connection, policy)
+    }
+
+    /// Inspects bounded queue metadata through a read-only `SQLite` connection.
+    ///
+    /// This operation never creates or migrates a database and never runs
+    /// retention maintenance.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified missing, schema, corruption, lock, or availability
+    /// failure without exposing the database path or row contents.
+    pub fn inspect_read_only(path: &Path) -> Result<StoreSnapshot, PersistenceError> {
+        let connection = open_read_only(path)?;
+        verify_current_schema(&connection)?;
+        let (queue_entries, oldest_enqueued_at_ms): (i64, Option<i64>) = connection
+            .query_row(
+                "SELECT COUNT(*), MIN(enqueued_at_ms) FROM outbox",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(map_sqlite_error)?;
+        let (receipt_entries, latest_delivered_at_ms): (i64, Option<i64>) = connection
+            .query_row(
+                "SELECT COUNT(*), MAX(delivered_at_ms) FROM delivery_receipts",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(map_sqlite_error)?;
+        let dead_letter_entries: i64 = connection
+            .query_row("SELECT COUNT(*) FROM dead_letters", [], |row| row.get(0))
+            .map_err(map_sqlite_error)?;
+        let queue_entries = bounded_count(queue_entries)?;
+        let receipt_entries = bounded_count(receipt_entries)?;
+        validate_snapshot_timestamp(queue_entries, oldest_enqueued_at_ms)?;
+        validate_snapshot_timestamp(receipt_entries, latest_delivered_at_ms)?;
+        Ok(StoreSnapshot {
+            queue_entries,
+            oldest_enqueued_at_ms,
+            receipt_entries,
+            latest_delivered_at_ms,
+            dead_letter_entries: bounded_count(dead_letter_entries)?,
+        })
+    }
+
+    /// Inspects durable state for one event through a read-only connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified missing database, schema, corruption, lock, or
+    /// availability failure. Dead-letter output is limited to its validated
+    /// safe error code.
+    pub fn inspect_event_read_only(
+        path: &Path,
+        event_id: EventId,
+    ) -> Result<Option<StoredEventState>, PersistenceError> {
+        let connection = open_read_only(path)?;
+        verify_current_schema(&connection)?;
+        let event_id = event_id.to_string();
+        let (count, state, error_code): (i64, Option<String>, Option<String>) = connection
+            .query_row(
+                "SELECT COUNT(*), MAX(state), MAX(error_code) FROM (
+                    SELECT 'pending' AS state, NULL AS error_code
+                      FROM outbox WHERE event_id = ?1
+                    UNION ALL
+                    SELECT 'delivered', NULL
+                      FROM delivery_receipts WHERE event_id = ?1
+                    UNION ALL
+                    SELECT 'dead_lettered', error_code
+                      FROM dead_letters WHERE event_id = ?1
+                 )",
+                [&event_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(map_sqlite_error)?;
+        match (count, state.as_deref(), error_code) {
+            (0, None, None) => Ok(None),
+            (1, Some("pending"), None) => Ok(Some(StoredEventState::Pending)),
+            (1, Some("delivered"), None) => Ok(Some(StoredEventState::Delivered)),
+            (1, Some("dead_lettered"), Some(error_code)) => {
+                validate_safe_code(&error_code)?;
+                Ok(Some(StoredEventState::DeadLettered { error_code }))
+            }
+            _ => Err(PersistenceError::CorruptData),
+        }
     }
 
     fn initialize(
@@ -512,6 +597,53 @@ impl SqliteStore {
         })
         .transpose()
     }
+}
+
+fn open_read_only(path: &Path) -> Result<Connection, PersistenceError> {
+    let metadata = path.symlink_metadata().map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            PersistenceError::NotFound
+        } else {
+            PersistenceError::StorageUnwritable
+        }
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(PersistenceError::StorageUnwritable);
+    }
+    Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(map_sqlite_error)
+}
+
+fn verify_current_schema(connection: &Connection) -> Result<(), PersistenceError> {
+    let version: u32 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(map_sqlite_error)?;
+    match version.cmp(&CURRENT_SCHEMA_VERSION) {
+        std::cmp::Ordering::Equal => Ok(()),
+        std::cmp::Ordering::Greater => Err(PersistenceError::UnsupportedSchema),
+        std::cmp::Ordering::Less => Err(PersistenceError::MigrationFailed),
+    }
+}
+
+fn bounded_count(value: i64) -> Result<usize, PersistenceError> {
+    usize::try_from(value).map_err(|_| PersistenceError::CorruptData)
+}
+
+fn validate_snapshot_timestamp(
+    count: usize,
+    timestamp_ms: Option<i64>,
+) -> Result<(), PersistenceError> {
+    if (count == 0) != timestamp_ms.is_none() {
+        return Err(PersistenceError::CorruptData);
+    }
+    timestamp_ms
+        .map(timestamp_from_ms)
+        .transpose()
+        .map(|_| ())
+        .map_err(|_| PersistenceError::CorruptData)
 }
 
 fn migrate(connection: &mut Connection) -> Result<(), PersistenceError> {

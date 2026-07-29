@@ -23,8 +23,9 @@ Codex 事件转换为 Windows 或 macOS 原生系统通知，并支持 Codex 运
 > 会话与拒绝矩阵已在 Linux loopback 测试架构中验证。持久中继角色现会以固定参数
 > 调用系统 OpenSSH、校验有界确认、分类传输/信任故障，并通过带抖动的指数退避和
 > 有界死信完成重试。同一 Linux 测试架构已验证离线排队、自动恢复、至少一次重发与
-> 桌面端去重。Windows/macOS SSH 服务端配置仍明确标记为未验证；更完整诊断仍属于
-> 阶段 17。
+> 桌面端去重。Windows/macOS SSH 服务端配置仍明确标记为未验证。阶段 17 的只读
+> doctor、角色感知 status、人类/JSON 一致输出、稳定健康退出码，以及感知投递结果的
+> 本地/远程自测均已实现，正在完成最终跨平台验证。
 
 实施顺序与各阶段验收门槛见 [`stages.md`](stages.md)。
 
@@ -388,7 +389,7 @@ Windows 上的用户配置与状态遵循 `%APPDATA%` 和 `%LOCALAPPDATA%`，mac
 ## 命令界面
 
 本地桌面端生命周期、两类低级 Codex 事件入口、受限 SSH 接收端、持久中继发送端
-以及聚焦的能力/安全检查已经实现；更完整的诊断命令仍保留规划职责：
+以及完整的只读运维诊断已经实现：
 
 | 命令 | 可用性 | 用途 |
 | --- | --- | --- |
@@ -399,9 +400,9 @@ Windows 上的用户配置与状态遵循 `%APPDATA%` 和 `%LOCALAPPDATA%`，mac
 | `agent` | 桌面端与中继端已实现 | 运行已配置的用户级角色进程。 |
 | `receive` | 已实现 | 从受限 SSH 会话接收一个有界规范事件，并通过本地 IPC 转交。 |
 | `install` / `uninstall` | 桌面端已实现 | 可逆地管理已验证 Codex hook 与 Windows/macOS 用户级自启动产物。 |
-| 其他 `doctor` 检查 | 规划中 | 报告更完整的 agent、IPC、存储与通知状态。 |
-| `test` | 桌面端已实现 | 通过本地 IPC 提交显式模拟的任务完成或审批请求事件。 |
-| `status` | 桌面端已实现 | 显示安装、agent、队列、投递与原生通知状态，不展示事件正文。 |
+| `doctor` | 桌面端与中继端已实现 | 只读检查配置、Codex、agent、IPC、存储、通知、OpenSSH 与目标连通性。 |
+| `test` | 桌面端与中继端已实现 | 提交任一显式模拟事件，并等待本地或远程桌面投递回执。 |
+| `status` | 桌面端与中继端已实现 | 显示角色、安装、agent、队列年龄/计数、最近投递、存储与原生状态，不展示事件正文。 |
 
 ### 本地桌面端生命周期
 
@@ -409,8 +410,8 @@ Windows 上的用户配置与状态遵循 `%APPDATA%` 和 `%LOCALAPPDATA%`，mac
 
 ```text
 codex-notifier install [--codex-version 0.144.5]
-codex-notifier status
-codex-notifier test [task-completed|approval-requested]
+codex-notifier status [--format human|json]
+codex-notifier test [task-completed|approval-requested] [--format human|json] [--wait-ms 100..180000]
 codex-notifier uninstall
 codex-notifier agent
 ```
@@ -423,7 +424,7 @@ codex-notifier agent
 `approval_installation=report_unavailable`。
 
 重复安装会原子替换此前拥有的 hook 与应用，不会增加重复 hook 或自启动项。
-`status` 只报告有界元数据。`uninstall` 会移除精确匹配的自有 hook、自启动身份、
+`status` 只报告有界元数据，并以只读方式检查 SQLite。`uninstall` 会移除精确匹配的自有 hook、自启动身份、
 应用和未修改的 installer 创建配置；预先存在或已修改的 hook/配置内容会被保留，
 SQLite 队列、投递记录和系统通知历史始终保留。Windows 上应从外部构建或下载的
 可执行文件运行 `uninstall`，因为已安装进程无法删除自身目录。macOS 上的 `install`
@@ -504,6 +505,31 @@ retry_max_attempts = 20
 [`docs/relay-ssh.md`](docs/relay-ssh.md)，执行证据见
 [`docs/verification/stage-16.md`](docs/verification/stage-16.md)。
 
+### 诊断、状态与自测
+
+阶段 17 增加角色感知的运维命令：
+
+```text
+codex-notifier doctor [--format human|json]
+codex-notifier status [--format human|json]
+codex-notifier test [task-completed|approval-requested] [--format human|json] [--wait-ms 100..180000]
+```
+
+`doctor` 检查配置、fixture 门禁的 Codex 支持、agent 状态、同用户 IPC、只读 SQLite
+状态，以及角色对应的原生通知或 OpenSSH 路径。它不会创建或迁移状态，不会更改
+Codex/SSH/自启动配置，不会请求通知权限，也不会发送事件。中继目标探测只发送空
+stdin，并且只接受接收端固定的 `malformed_json` 拒绝，因此连通性检查不会进入任一队列。
+
+`test` 通过正常 IPC 提交固定的私密展示文本，并等待稳定事件 ID 进入回执或死信。本地
+回执表示原生适配器已接受通知。对于中继，受限接收端会等待桌面原生回执后返回
+`delivered`；桌面端尚未完成的工作仍按可重试故障处理。人类可读行与紧凑 schema-v1
+JSON 使用相同的类型化状态、错误码、退出码和固定修复建议；二者都不包含事件正文、
+来源/用户/主机标签、密钥、原始 SSH 错误、profile 或机器路径。
+
+完整检查顺序、字段契约、自测语义、修复建议和退出码表见
+[`docs/diagnostics.md`](docs/diagnostics.md)，阶段 17 执行证据见
+[`docs/verification/stage-17.md`](docs/verification/stage-17.md)。
+
 ### Codex 事件 emit
 
 阶段 10 的可执行入口从 stdin 读取一个原始 Codex `Stop` hook JSON 对象，上限为
@@ -535,8 +561,8 @@ codex-notifier emit approval-requested --codex-version 0.144.5 --state-dir <绝�
 codex-notifier doctor codex --codex-version 0.144.5 --interface <cli-hook|app-server>
 ```
 
-它不读取 transcript、终端输出、凭据或用户配置，也不会回显未知版本文本。更完整的
-诊断仍属于阶段 17。
+它不读取 transcript、终端输出、凭据或用户配置，也不会回显未知版本文本。完整的
+`doctor` 命令会把该能力检查与阶段 17 的运维检查组合起来。
 
 ## 仓库结构
 

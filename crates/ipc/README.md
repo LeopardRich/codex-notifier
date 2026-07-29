@@ -10,3 +10,6 @@ one bounded structured acknowledgement per connection. Connect, read, and
 write deadlines, a connection semaphore, bidirectional peer checks, secure
 stale endpoint recovery, and strict endpoint names keep the local path bounded.
 No proxy library or proxy environment variable is consulted.
+
+The read-only health probe connects, verifies the peer identity, and closes
+without sending a frame, so diagnostics cannot enqueue an event.

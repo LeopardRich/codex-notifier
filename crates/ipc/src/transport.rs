@@ -109,6 +109,21 @@ impl IpcClient {
         Self { endpoint, policy }
     }
 
+    /// Verifies that the configured endpoint accepts a same-user connection.
+    ///
+    /// The probe sends no protocol frame and therefore cannot submit or mutate
+    /// an event. The server observes a closed empty connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified connection, peer-identity, or deadline failure.
+    pub async fn probe(&self) -> Result<(), IpcError> {
+        let stream = connect(&self.endpoint, self.policy.connect_timeout).await?;
+        validate_client_peer(&stream)?;
+        drop(stream);
+        Ok(())
+    }
+
     /// Submits one canonical event and validates its matching acknowledgement.
     ///
     /// # Errors

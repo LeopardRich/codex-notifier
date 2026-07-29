@@ -5,7 +5,11 @@ use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
 
 use codex_notifier::desktop::{
-    DesktopError, load_current_config, run_agent, submit_local_test, submit_remote_event,
+    DesktopError, load_current_config, load_current_config_read_only, run_agent,
+    submit_remote_event,
+};
+use codex_notifier::diagnostics::{
+    OutputFormat, doctor, render_status, render_status_error, run_test, wait_for_event_state,
 };
 use codex_notifier::installer::{InstallerError, install, status, uninstall};
 use codex_notifier::lifecycle::RemovalDisposition;
@@ -15,7 +19,8 @@ use codex_notifier_codex_source::{
     MAX_TASK_COMPLETED_INPUT_BYTES, SourceContext,
 };
 use codex_notifier_core::EventKind;
-use codex_notifier_ipc::{IpcEndpoint, IpcPolicy};
+use codex_notifier_ipc::{AckStatus, Acknowledgement, IpcEndpoint, IpcPolicy};
+use codex_notifier_persistence::{PersistenceError, StoredEventState};
 use codex_notifier_ssh_transport::{
     ReceiveError, diagnose_authorized_keys, diagnose_host_key, ipc_rejection,
     rejection_acknowledgement, safe_rejection, validate_receive_session, write_acknowledgement,
@@ -55,9 +60,11 @@ struct EmitCommand {
 struct CodexDoctorCommand {
     codex_version: String,
     interface: CodexInterface,
+    format: OutputFormat,
 }
 
 enum DoctorCommand {
+    All(OutputFormat),
     Codex(CodexDoctorCommand),
     Ssh(SshDoctorCommand),
 }
@@ -66,6 +73,13 @@ struct SshDoctorCommand {
     ssh_config: Option<PathBuf>,
     known_hosts: Option<PathBuf>,
     authorized_keys: Option<PathBuf>,
+    format: OutputFormat,
+}
+
+struct TestCommand {
+    kind: EventKind,
+    format: OutputFormat,
+    wait: Option<std::time::Duration>,
 }
 
 enum Command {
@@ -75,8 +89,8 @@ enum Command {
     Agent,
     Install { codex_version: Option<String> },
     Uninstall,
-    Status,
-    Test(EventKind),
+    Status(OutputFormat),
+    Test(TestCommand),
 }
 
 enum CommandError {
@@ -115,22 +129,43 @@ impl CommandError {
 
 #[tokio::main]
 async fn main() {
-    if let Err(error) = run().await {
-        eprintln!("{}", error.code());
-        std::process::exit(error.exit_code());
+    match run().await {
+        Ok(exit_code) if exit_code != 0 => std::process::exit(exit_code),
+        Ok(_) => {}
+        Err(error) => {
+            eprintln!("{}", error.code());
+            std::process::exit(error.exit_code());
+        }
     }
 }
 
-async fn run() -> Result<(), CommandError> {
+async fn run() -> Result<i32, CommandError> {
     match parse_command(std::env::args().skip(1))? {
-        Command::Emit(command) => run_emit(command).await,
+        Command::Emit(command) => {
+            run_emit(command).await?;
+            Ok(0)
+        }
+        Command::Doctor(DoctorCommand::All(format)) => {
+            let report = doctor().await;
+            print_report(&report.render(format));
+            Ok(report.exit_code())
+        }
         Command::Doctor(DoctorCommand::Codex(command)) => {
             run_codex_doctor(&command);
-            Ok(())
+            Ok(0)
         }
-        Command::Doctor(DoctorCommand::Ssh(command)) => run_ssh_doctor(&command),
-        Command::Receive => run_receive().await,
-        Command::Agent => run_agent().await.map_err(CommandError::Desktop),
+        Command::Doctor(DoctorCommand::Ssh(command)) => {
+            run_ssh_doctor(&command)?;
+            Ok(0)
+        }
+        Command::Receive => {
+            run_receive().await?;
+            Ok(0)
+        }
+        Command::Agent => {
+            run_agent().await.map_err(CommandError::Desktop)?;
+            Ok(0)
+        }
         Command::Install { codex_version } => {
             let codex_version = codex_version.map_or_else(detect_codex_version, Ok)?;
             let report = install(&codex_version)
@@ -145,7 +180,7 @@ async fn run() -> Result<(), CommandError> {
                 report.hook_trust,
                 report.approval_notice,
             );
-            Ok(())
+            Ok(0)
         }
         Command::Uninstall => {
             let report = uninstall().await.map_err(CommandError::Installer)?;
@@ -157,39 +192,20 @@ async fn run() -> Result<(), CommandError> {
                 report.managed.config == RemovalDisposition::Preserved,
                 report.state_preserved,
             );
-            Ok(())
+            Ok(0)
         }
-        Command::Status => {
-            let report = status().map_err(CommandError::Installer)?;
-            println!(
-                "installed={}\nversion={}\nstartup_registered={}\nagent_running={}\nagent_stale={}\nprofile={}\nqueue_pending={}\ndelivery_receipts={}\ndead_letters={}\nnotification={}\nfocus={}",
-                report.installed,
-                report.version.as_deref().unwrap_or("none"),
-                report.startup_registered,
-                report.agent.running,
-                report.agent.stale,
-                report.agent.profile.as_deref().unwrap_or("none"),
-                optional_count(report.queue_pending),
-                optional_count(report.delivery_receipts),
-                optional_count(report.dead_letters),
-                report
-                    .notification
-                    .map_or("unavailable", |value| value.status().as_str()),
-                report
-                    .notification
-                    .map_or("unavailable", |value| value.focus().as_str()),
-            );
-            Ok(())
+        Command::Status(format) => {
+            let (output, exit_code) = match status() {
+                Ok(report) => render_status(&report, format),
+                Err(error) => render_status_error(&error, format),
+            };
+            print_report(&output);
+            Ok(exit_code)
         }
-        Command::Test(kind) => {
-            let (event_id, acknowledgement) = submit_local_test(kind)
-                .await
-                .map_err(CommandError::Desktop)?;
-            println!(
-                "event_id={event_id}\nacknowledgement={}",
-                acknowledgement_name(acknowledgement)
-            );
-            Ok(())
+        Command::Test(command) => {
+            let report = run_test(command.kind, command.wait).await;
+            print_report(&report.render(command.format));
+            Ok(report.exit_code())
         }
     }
 }
@@ -208,7 +224,9 @@ async fn run_receive() -> Result<(), CommandError> {
         {
             Err(error) => rejection_acknowledgement(None, &error).map_err(CommandError::Receive)?,
             Ok(event) => match submit_remote_event(&event).await {
-                Ok(acknowledgement) => acknowledgement,
+                Ok(acknowledgement) => {
+                    complete_remote_test_acknowledgement(&event, acknowledgement).await?
+                }
                 Err(DesktopError::Ipc(error)) => {
                     ipc_rejection(event.event_id(), &error).map_err(CommandError::Receive)?
                 }
@@ -225,6 +243,71 @@ async fn run_receive() -> Result<(), CommandError> {
 
     write_acknowledgement(&mut std::io::stdout().lock(), &acknowledgement)
         .map_err(CommandError::Receive)
+}
+
+async fn complete_remote_test_acknowledgement(
+    event: &codex_notifier_core::CanonicalEvent,
+    acknowledgement: Acknowledgement,
+) -> Result<Acknowledgement, CommandError> {
+    if event.source().host_label() != "local-test"
+        || !matches!(
+            acknowledgement.status(),
+            AckStatus::Accepted | AckStatus::Duplicate
+        )
+    {
+        return Ok(acknowledgement);
+    }
+    let (_, config) = match load_current_config_read_only() {
+        Ok(value) => value,
+        Err(error) => {
+            return safe_rejection(
+                event.event_id(),
+                error.code(),
+                false,
+                "Desktop self-test state is unavailable",
+            )
+            .map_err(CommandError::Receive);
+        }
+    };
+    match wait_for_event_state(
+        config.storage().state_dir(),
+        event.event_id(),
+        std::time::Duration::from_secs(3),
+    )
+    .await
+    {
+        Ok(StoredEventState::Delivered) => Ok(Acknowledgement::delivered(event.event_id())),
+        Ok(StoredEventState::DeadLettered { error_code }) => safe_rejection(
+            event.event_id(),
+            &error_code,
+            false,
+            "Desktop self-test delivery failed",
+        )
+        .map_err(CommandError::Receive),
+        Ok(StoredEventState::Pending) => safe_rejection(
+            event.event_id(),
+            "test_delivery_pending",
+            true,
+            "Desktop self-test delivery is pending",
+        )
+        .map_err(CommandError::Receive),
+        Err(error) => safe_rejection(
+            event.event_id(),
+            error.code().as_str(),
+            persistence_retryable(&error),
+            "Desktop self-test state is unavailable",
+        )
+        .map_err(CommandError::Receive),
+    }
+}
+
+const fn persistence_retryable(error: &PersistenceError) -> bool {
+    matches!(
+        error,
+        PersistenceError::DatabaseLocked
+            | PersistenceError::StorageUnwritable
+            | PersistenceError::DatabaseFailure
+    )
 }
 
 async fn run_emit(command: EmitCommand) -> Result<(), CommandError> {
@@ -273,14 +356,29 @@ fn run_codex_doctor(command: &CodexDoctorCommand) {
     let version = report
         .version()
         .map_or("unsupported", CodexCliVersion::as_str);
-    println!(
-        "codex_version={version}\ninterface={}\ntask_completed={}\napproval_requested={}\napproval_installation={}\napproval_notice={}",
-        report.interface().as_str(),
-        report.task_completed().as_str(),
-        report.approval_requested().as_str(),
-        report.approval_installation().as_str(),
-        report.approval_installation_notice(),
-    );
+    match command.format {
+        OutputFormat::Human => println!(
+            "codex_version={version}\ninterface={}\ntask_completed={}\napproval_requested={}\napproval_installation={}\napproval_notice={}",
+            report.interface().as_str(),
+            report.task_completed().as_str(),
+            report.approval_requested().as_str(),
+            report.approval_installation().as_str(),
+            report.approval_installation_notice(),
+        ),
+        OutputFormat::Json => print_report(
+            &serde_json::json!({
+                "schema_version": 1,
+                "command": "doctor_codex",
+                "codex_version": version,
+                "interface": report.interface().as_str(),
+                "task_completed": report.task_completed().as_str(),
+                "approval_requested": report.approval_requested().as_str(),
+                "approval_installation": report.approval_installation().as_str(),
+                "approval_notice": report.approval_installation_notice(),
+            })
+            .to_string(),
+        ),
+    }
 }
 
 fn run_ssh_doctor(command: &SshDoctorCommand) -> Result<(), CommandError> {
@@ -302,11 +400,22 @@ fn run_ssh_doctor(command: &SshDoctorCommand) -> Result<(), CommandError> {
         command.ssh_config.as_deref(),
     );
     let authorized_keys = diagnose_authorized_keys(authorized_keys);
-    println!(
-        "host_key={}\nauthorized_keys={}",
-        host_key.as_str(),
-        authorized_keys.as_str()
-    );
+    match command.format {
+        OutputFormat::Human => println!(
+            "host_key={}\nauthorized_keys={}",
+            host_key.as_str(),
+            authorized_keys.as_str()
+        ),
+        OutputFormat::Json => print_report(
+            &serde_json::json!({
+                "schema_version": 1,
+                "command": "doctor_ssh",
+                "host_key": host_key.as_str(),
+                "authorized_keys": authorized_keys.as_str(),
+            })
+            .to_string(),
+        ),
+    }
     Ok(())
 }
 
@@ -330,7 +439,7 @@ fn parse_command(mut arguments: impl Iterator<Item = String>) -> Result<Command,
         Some("agent") if arguments.next().is_none() => Ok(Command::Agent),
         Some("install") => parse_install(arguments),
         Some("uninstall") if arguments.next().is_none() => Ok(Command::Uninstall),
-        Some("status") if arguments.next().is_none() => Ok(Command::Status),
+        Some("status") => parse_format_only(arguments).map(Command::Status),
         Some("test") => parse_test(arguments),
         _ => Err(CommandError::Arguments),
     }
@@ -348,15 +457,37 @@ fn parse_install(mut arguments: impl Iterator<Item = String>) -> Result<Command,
 }
 
 fn parse_test(mut arguments: impl Iterator<Item = String>) -> Result<Command, CommandError> {
-    let kind = match arguments.next().as_deref() {
-        None | Some("task-completed") => EventKind::TaskCompleted,
-        Some("approval-requested") => EventKind::ApprovalRequested,
-        Some(_) => return Err(CommandError::Arguments),
-    };
-    if arguments.next().is_some() {
-        return Err(CommandError::Arguments);
+    let mut kind = None;
+    let mut format = OutputFormat::Human;
+    let mut format_set = false;
+    let mut wait = None;
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "task-completed" if kind.is_none() => kind = Some(EventKind::TaskCompleted),
+            "approval-requested" if kind.is_none() => kind = Some(EventKind::ApprovalRequested),
+            "--format" if !format_set => {
+                format = parse_output_format(&arguments.next().ok_or(CommandError::Arguments)?)?;
+                format_set = true;
+            }
+            "--wait-ms" if wait.is_none() => {
+                let milliseconds = arguments
+                    .next()
+                    .ok_or(CommandError::Arguments)?
+                    .parse::<u64>()
+                    .map_err(|_| CommandError::Arguments)?;
+                if !(100..=180_000).contains(&milliseconds) {
+                    return Err(CommandError::Arguments);
+                }
+                wait = Some(std::time::Duration::from_millis(milliseconds));
+            }
+            _ => return Err(CommandError::Arguments),
+        }
     }
-    Ok(Command::Test(kind))
+    Ok(Command::Test(TestCommand {
+        kind: kind.unwrap_or(EventKind::TaskCompleted),
+        format,
+        wait,
+    }))
 }
 
 fn parse_emit(mut arguments: impl Iterator<Item = String>) -> Result<EmitCommand, CommandError> {
@@ -403,21 +534,40 @@ fn parse_doctor(
     mut arguments: impl Iterator<Item = String>,
 ) -> Result<DoctorCommand, CommandError> {
     match arguments.next().as_deref() {
+        None => return Ok(DoctorCommand::All(OutputFormat::Human)),
+        Some("--format") => {
+            let format = parse_output_format(&arguments.next().ok_or(CommandError::Arguments)?)?;
+            if arguments.next().is_some() {
+                return Err(CommandError::Arguments);
+            }
+            return Ok(DoctorCommand::All(format));
+        }
         Some("ssh") => return parse_ssh_doctor(arguments),
         Some("codex") => {}
         _ => return Err(CommandError::Arguments),
     }
     let mut codex_version = None;
     let mut interface = None;
+    let mut format = OutputFormat::Human;
+    let mut format_set = false;
     while let Some(flag) = arguments.next() {
         let value = arguments.next().ok_or(CommandError::Arguments)?;
-        let target = match flag.as_str() {
-            "--codex-version" => &mut codex_version,
-            "--interface" => &mut interface,
+        match flag.as_str() {
+            "--codex-version" => {
+                if codex_version.replace(value).is_some() {
+                    return Err(CommandError::Arguments);
+                }
+            }
+            "--interface" => {
+                if interface.replace(value).is_some() {
+                    return Err(CommandError::Arguments);
+                }
+            }
+            "--format" if !format_set => {
+                format = parse_output_format(&value)?;
+                format_set = true;
+            }
             _ => return Err(CommandError::Arguments),
-        };
-        if target.replace(value).is_some() {
-            return Err(CommandError::Arguments);
         }
     }
     let interface = match interface.as_deref() {
@@ -428,6 +578,7 @@ fn parse_doctor(
     Ok(DoctorCommand::Codex(CodexDoctorCommand {
         codex_version: codex_version.ok_or(CommandError::Arguments)?,
         interface,
+        format,
     }))
 }
 
@@ -437,8 +588,19 @@ fn parse_ssh_doctor(
     let mut known_hosts = None;
     let mut authorized_keys = None;
     let mut ssh_config = None;
+    let mut format = OutputFormat::Human;
+    let mut format_set = false;
     while let Some(flag) = arguments.next() {
-        let value = PathBuf::from(arguments.next().ok_or(CommandError::Arguments)?);
+        let raw = arguments.next().ok_or(CommandError::Arguments)?;
+        if flag == "--format" {
+            if format_set {
+                return Err(CommandError::Arguments);
+            }
+            format = parse_output_format(&raw)?;
+            format_set = true;
+            continue;
+        }
+        let value = PathBuf::from(raw);
         let target = match flag.as_str() {
             "--ssh-config" => &mut ssh_config,
             "--known-hosts" => &mut known_hosts,
@@ -453,7 +615,30 @@ fn parse_ssh_doctor(
         ssh_config,
         known_hosts,
         authorized_keys,
+        format,
     }))
+}
+
+fn parse_format_only(
+    mut arguments: impl Iterator<Item = String>,
+) -> Result<OutputFormat, CommandError> {
+    match (
+        arguments.next().as_deref(),
+        arguments.next(),
+        arguments.next(),
+    ) {
+        (None, None, None) => Ok(OutputFormat::Human),
+        (Some("--format"), Some(value), None) => parse_output_format(&value),
+        _ => Err(CommandError::Arguments),
+    }
+}
+
+fn parse_output_format(value: &str) -> Result<OutputFormat, CommandError> {
+    match value {
+        "human" => Ok(OutputFormat::Human),
+        "json" => Ok(OutputFormat::Json),
+        _ => Err(CommandError::Arguments),
+    }
 }
 
 fn read_stdin(maximum: usize) -> Result<Vec<u8>, CommandError> {
@@ -490,16 +675,10 @@ fn detect_codex_version() -> Result<String, CommandError> {
         .ok_or(CommandError::CodexVersion)
 }
 
-fn optional_count(value: Option<usize>) -> String {
-    value.map_or_else(|| "unavailable".to_owned(), |value| value.to_string())
-}
-
-const fn acknowledgement_name(status: codex_notifier_ipc::AckStatus) -> &'static str {
-    match status {
-        codex_notifier_ipc::AckStatus::Accepted => "accepted",
-        codex_notifier_ipc::AckStatus::Duplicate => "duplicate",
-        codex_notifier_ipc::AckStatus::Delivered => "delivered",
-        codex_notifier_ipc::AckStatus::Rejected => "rejected",
+fn print_report(output: &str) {
+    print!("{output}");
+    if !output.ends_with('\n') {
+        println!();
     }
 }
 
@@ -537,7 +716,10 @@ mod tests {
         ));
         assert!(matches!(
             parse_command(arguments(&["test", "approval-requested"])),
-            Ok(Command::Test(EventKind::ApprovalRequested))
+            Ok(Command::Test(TestCommand {
+                kind: EventKind::ApprovalRequested,
+                ..
+            }))
         ));
         assert!(matches!(
             parse_command(arguments(&["uninstall", "extra"])),
@@ -568,5 +750,48 @@ mod tests {
             ])),
             Err(CommandError::Arguments)
         ));
+    }
+
+    #[test]
+    fn stage_17_commands_freeze_formats_and_wait_bounds() {
+        assert!(matches!(
+            parse_command(arguments(&["doctor"])),
+            Ok(Command::Doctor(DoctorCommand::All(OutputFormat::Human)))
+        ));
+        assert!(matches!(
+            parse_command(arguments(&["doctor", "--format", "json"])),
+            Ok(Command::Doctor(DoctorCommand::All(OutputFormat::Json)))
+        ));
+        assert!(matches!(
+            parse_command(arguments(&["status", "--format", "json"])),
+            Ok(Command::Status(OutputFormat::Json))
+        ));
+        assert!(matches!(
+            parse_command(arguments(&[
+                "test",
+                "--wait-ms",
+                "100",
+                "approval-requested",
+                "--format",
+                "json"
+            ])),
+            Ok(Command::Test(TestCommand {
+                kind: EventKind::ApprovalRequested,
+                format: OutputFormat::Json,
+                wait: Some(_),
+            }))
+        ));
+        for invalid in [
+            &["doctor", "--format", "xml"][..],
+            &["status", "extra"][..],
+            &["test", "--wait-ms", "99"][..],
+            &["test", "--wait-ms", "180001"][..],
+            &["test", "--format", "json", "--format", "human"][..],
+        ] {
+            assert!(matches!(
+                parse_command(arguments(invalid)),
+                Err(CommandError::Arguments)
+            ));
+        }
     }
 }

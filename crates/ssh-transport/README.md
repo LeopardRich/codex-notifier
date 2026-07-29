@@ -13,3 +13,8 @@ not embed an SSH client/server or open a listener. Setup and forced-command
 templates are documented in
 [`docs/restricted-ssh.md`](../../docs/restricted-ssh.md); relay operation and
 recovery are in [`docs/relay-ssh.md`](../../docs/relay-ssh.md).
+
+Stage 17 adds a client-availability check and an empty-stdin receiver probe.
+The latter accepts only the forced receiver's fixed non-retryable
+`malformed_json` acknowledgement and therefore verifies authentication,
+host-key policy, and reachability without submitting an event.

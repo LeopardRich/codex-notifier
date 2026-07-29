@@ -7,5 +7,6 @@ mod store;
 pub use error::{PersistenceError, PersistenceErrorCode};
 pub use model::{
     DeadLetter, EnqueueOutcome, LeasedEvent, ReceiptOutcome, RetryOutcome, StorePolicy,
+    StoreSnapshot, StoredEventState,
 };
 pub use store::{CURRENT_SCHEMA_VERSION, SqliteStore};

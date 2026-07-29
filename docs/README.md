@@ -13,6 +13,8 @@ behavior remains documented in both root README files.
   setup, security checks, and revocation.
 - [`relay-ssh.md`](relay-ssh.md): source-built relay configuration, delivery,
   retry recovery, and removal.
+- [`diagnostics.md`](diagnostics.md): read-only health/status contracts,
+  delivery-aware local/remote self-tests, and stable exit codes.
 - [`decisions/`](decisions/): accepted architecture decisions.
 - [`verification/`](verification/): stage evidence and explicitly unverified
   platform checks.

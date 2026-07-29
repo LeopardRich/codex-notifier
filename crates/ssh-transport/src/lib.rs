@@ -221,6 +221,29 @@ impl OpenSshDelivery {
         Self { config }
     }
 
+    /// Verifies authentication, host-key policy, reachability, and the forced
+    /// receiver boundary without submitting an event.
+    ///
+    /// The probe writes an empty stdin stream. A reachable restricted receiver
+    /// must return its bounded `malformed_json` acknowledgement, so no event can
+    /// enter either outbox.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same payload-free process, network, authentication,
+    /// host-key, output, or acknowledgement classifications as delivery.
+    pub async fn probe_receiver(&self) -> Result<(), SshDeliveryError> {
+        let capture =
+            run_ssh_process(&self.config, Vec::new(), CancellationToken::default()).await?;
+        if !capture.status.success() {
+            return Err(classify_process_failure(&capture.stderr));
+        }
+        if capture.stdin_failed || capture.stdout_failed || capture.stderr_failed {
+            return Err(SshDeliveryError::ProcessFailed);
+        }
+        validate_probe_acknowledgement(&capture.stdout)
+    }
+
     async fn deliver_once(
         &self,
         event: &CanonicalEvent,
@@ -241,6 +264,21 @@ impl OpenSshDelivery {
         }
         validate_delivery_acknowledgement(event.event_id(), &capture.stdout)
     }
+}
+
+fn validate_probe_acknowledgement(bytes: &[u8]) -> Result<(), SshDeliveryError> {
+    let acknowledgement =
+        Acknowledgement::from_json(bytes).map_err(|_| SshDeliveryError::AcknowledgementInvalid)?;
+    let error = acknowledgement
+        .error()
+        .filter(|error| {
+            acknowledgement.status() == AckStatus::Rejected && error.code() == "malformed_json"
+        })
+        .ok_or(SshDeliveryError::AcknowledgementInvalid)?;
+    if error.retryable() {
+        return Err(SshDeliveryError::AcknowledgementInvalid);
+    }
+    Ok(())
 }
 
 fn validate_delivery_acknowledgement(
@@ -700,6 +738,24 @@ impl DiagnosticStatus {
             Self::Unavailable => "unavailable",
             Self::NotConfigured => "not_configured",
         }
+    }
+}
+
+/// Checks whether the system OpenSSH client can be started successfully.
+///
+/// Version output is discarded because diagnostics expose only a bounded
+/// typed status.
+#[must_use]
+pub fn diagnose_openssh_client() -> DiagnosticStatus {
+    match Command::new("ssh")
+        .arg("-V")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+    {
+        Ok(status) if status.success() => DiagnosticStatus::Ready,
+        Ok(_) | Err(_) => DiagnosticStatus::Unavailable,
     }
 }
 
@@ -1167,6 +1223,32 @@ mod tests {
         );
         assert_eq!(
             validate_delivery_acknowledgement(event_id, b"not-json"),
+            Err(SshDeliveryError::AcknowledgementInvalid)
+        );
+    }
+
+    #[test]
+    fn empty_receiver_probe_accepts_only_the_fixed_non_retryable_rejection() {
+        let event_id = EventId::new_v7();
+        let expected = Acknowledgement::rejected(
+            event_id,
+            AckError::new("malformed_json", false, "Event payload is invalid").expect("error"),
+        );
+        assert_eq!(
+            validate_probe_acknowledgement(&expected.to_json().expect("acknowledgement")),
+            Ok(())
+        );
+
+        let wrong_code = Acknowledgement::rejected(
+            event_id,
+            AckError::new("agent_queue_full", true, "Agent queue is full").expect("error"),
+        );
+        assert_eq!(
+            validate_probe_acknowledgement(&wrong_code.to_json().expect("acknowledgement")),
+            Err(SshDeliveryError::AcknowledgementInvalid)
+        );
+        assert_eq!(
+            validate_probe_acknowledgement(b"not-json"),
             Err(SshDeliveryError::AcknowledgementInvalid)
         );
     }

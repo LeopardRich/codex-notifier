@@ -7,7 +7,7 @@ use codex_notifier_core::{
 };
 use codex_notifier_persistence::{
     CURRENT_SCHEMA_VERSION, EnqueueOutcome, PersistenceError, ReceiptOutcome, RetryOutcome,
-    SqliteStore, StorePolicy,
+    SqliteStore, StorePolicy, StoredEventState,
 };
 use rusqlite::{Connection, TransactionBehavior, params};
 use tempfile::tempdir;
@@ -158,6 +158,109 @@ fn duplicate_submissions_and_delivery_receipts_are_idempotent() {
         ReceiptOutcome::Duplicate
     );
     assert_eq!(store.receipt_count().expect("receipt count"), 1);
+}
+
+#[test]
+fn read_only_snapshot_and_event_state_report_metadata_without_mutation() {
+    let directory = tempdir().expect("temporary directory");
+    let path = directory.path().join("state.sqlite3");
+    let first = event(ID_1, EventKind::TaskCompleted, NOW_MS - 1_000);
+    let second = event(ID_2, EventKind::ApprovalRequested, NOW_MS - 500);
+    let mut store = SqliteStore::open(&path, StorePolicy::default()).expect("store");
+    store.enqueue(&first, NOW_MS - 50).expect("pending event");
+    store
+        .enqueue(&second, NOW_MS - 25)
+        .expect("delivered event");
+    store
+        .lease_next(NOW_MS, "lease-01")
+        .expect("lease")
+        .expect("first event");
+    store
+        .acknowledge(first.event_id(), "lease-01", NOW_MS + 10)
+        .expect("receipt");
+    drop(store);
+
+    let snapshot = SqliteStore::inspect_read_only(&path).expect("read-only snapshot");
+    assert_eq!(snapshot.queue_entries(), 1);
+    assert_eq!(snapshot.oldest_enqueued_at_ms(), Some(NOW_MS - 25));
+    assert_eq!(snapshot.receipt_entries(), 1);
+    assert_eq!(snapshot.latest_delivered_at_ms(), Some(NOW_MS + 10));
+    assert_eq!(snapshot.dead_letter_entries(), 0);
+    assert_eq!(
+        SqliteStore::inspect_event_read_only(&path, first.event_id()).expect("first state"),
+        Some(StoredEventState::Delivered)
+    );
+    assert_eq!(
+        SqliteStore::inspect_event_read_only(&path, second.event_id()).expect("second state"),
+        Some(StoredEventState::Pending)
+    );
+
+    let reopened = SqliteStore::open(&path, StorePolicy::default()).expect("reopen");
+    assert_eq!(reopened.queue_len().expect("queue length"), 1);
+    assert_eq!(reopened.receipt_count().expect("receipt count"), 1);
+    drop(reopened);
+
+    let raw = Connection::open(&path).expect("raw database");
+    raw.execute(
+        "INSERT INTO delivery_receipts(event_id, delivered_at_ms) VALUES (?1, ?2)",
+        params![ID_2, NOW_MS + 20],
+    )
+    .expect("cross-table corruption fixture");
+    drop(raw);
+    assert_eq!(
+        SqliteStore::inspect_event_read_only(&path, second.event_id()),
+        Err(PersistenceError::CorruptData)
+    );
+}
+
+#[test]
+fn read_only_inspection_never_creates_or_migrates_state() {
+    let directory = tempdir().expect("temporary directory");
+    let missing = directory.path().join("missing.sqlite3");
+    assert_eq!(
+        SqliteStore::inspect_read_only(&missing),
+        Err(PersistenceError::NotFound)
+    );
+    assert!(!missing.exists());
+
+    let legacy = directory.path().join("legacy.sqlite3");
+    let connection = Connection::open(&legacy).expect("legacy database");
+    connection
+        .execute_batch(include_str!("fixtures/schema-v0.sql"))
+        .expect("legacy schema");
+    drop(connection);
+    assert_eq!(
+        SqliteStore::inspect_read_only(&legacy),
+        Err(PersistenceError::MigrationFailed)
+    );
+    let connection = Connection::open(&legacy).expect("reopen legacy");
+    let version: u32 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("legacy version");
+    assert_eq!(version, 0);
+}
+
+#[test]
+fn read_only_snapshot_rejects_invalid_metadata_timestamps() {
+    let directory = tempdir().expect("temporary directory");
+    let path = directory.path().join("state.sqlite3");
+    let mut store = SqliteStore::open(&path, StorePolicy::default()).expect("store");
+    store
+        .record_delivery(id(ID_1), NOW_MS)
+        .expect("delivery receipt");
+    drop(store);
+    let raw = Connection::open(&path).expect("raw database");
+    raw.execute(
+        "UPDATE delivery_receipts SET delivered_at_ms = ?1 WHERE event_id = ?2",
+        params![i64::MAX, ID_1],
+    )
+    .expect("invalid timestamp fixture");
+    drop(raw);
+
+    assert_eq!(
+        SqliteStore::inspect_read_only(&path),
+        Err(PersistenceError::CorruptData)
+    );
 }
 
 #[test]

@@ -192,6 +192,62 @@ pub enum RetryOutcome {
     DeadLettered,
 }
 
+/// Read-only bounded metadata used by status and diagnostic commands.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct StoreSnapshot {
+    pub(crate) queue_entries: usize,
+    pub(crate) oldest_enqueued_at_ms: Option<i64>,
+    pub(crate) receipt_entries: usize,
+    pub(crate) latest_delivered_at_ms: Option<i64>,
+    pub(crate) dead_letter_entries: usize,
+}
+
+impl StoreSnapshot {
+    /// Returns the number of pending or leased events.
+    #[must_use]
+    pub const fn queue_entries(self) -> usize {
+        self.queue_entries
+    }
+
+    /// Returns the oldest enqueue time in Unix milliseconds, if queued work exists.
+    #[must_use]
+    pub const fn oldest_enqueued_at_ms(self) -> Option<i64> {
+        self.oldest_enqueued_at_ms
+    }
+
+    /// Returns the number of retained successful-delivery receipts.
+    #[must_use]
+    pub const fn receipt_entries(self) -> usize {
+        self.receipt_entries
+    }
+
+    /// Returns the most recent successful-delivery time in Unix milliseconds.
+    #[must_use]
+    pub const fn latest_delivered_at_ms(self) -> Option<i64> {
+        self.latest_delivered_at_ms
+    }
+
+    /// Returns the number of retained metadata-only dead letters.
+    #[must_use]
+    pub const fn dead_letter_entries(self) -> usize {
+        self.dead_letter_entries
+    }
+}
+
+/// Read-only durable state for one stable event identifier.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum StoredEventState {
+    /// The payload remains pending or leased in the outbox.
+    Pending,
+    /// A successful-delivery receipt exists.
+    Delivered,
+    /// Only safe dead-letter metadata remains.
+    DeadLettered {
+        /// Validated payload-free failure code retained by the store.
+        error_code: String,
+    },
+}
+
 /// One leased canonical event and its compare-and-set token.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LeasedEvent {

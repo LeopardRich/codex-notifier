@@ -1,6 +1,7 @@
 //! Executable composition root and user-level agent host.
 
 pub mod desktop;
+pub mod diagnostics;
 pub mod installer;
 pub mod lifecycle;
 pub mod platform;

@@ -34,8 +34,10 @@ notifications, including events produced by Codex running on a remote server.
 > trust failures, and schedules jittered exponential retries with bounded
 > dead letters. The same Linux harness verifies offline queueing, automatic
 > recovery, at-least-once resend, and desktop deduplication. Windows/macOS
-> SSH-server setup remains explicitly unverified; broader diagnostics remain
-> Stage 17 work.
+> SSH-server setup remains explicitly unverified. Stage 17 read-only doctor,
+> role-aware status, matching human/JSON output, stable health exit codes, and
+> delivery-aware local/remote self-tests are implemented and under final
+> cross-platform verification.
 
 The implementation sequence and acceptance gates are defined in
 [`stages.md`](stages.md).
@@ -461,8 +463,8 @@ output.
 ## Command Surface
 
 The local desktop lifecycle, two low-level Codex ingestion entries, restricted
-SSH receiver, durable relay sender, and focused capability/security checks are
-implemented. Broader diagnostics retain their planned responsibilities:
+SSH receiver, durable relay sender, and complete read-only operational
+diagnostics are implemented:
 
 | Command | Availability | Purpose |
 | --- | --- | --- |
@@ -473,9 +475,9 @@ implemented. Broader diagnostics retain their planned responsibilities:
 | `agent` | Implemented for desktop and relay | Run the configured per-user role process. |
 | `receive` | Implemented | Accept exactly one bounded canonical event from a restricted SSH session and forward it over local IPC. |
 | `install` / `uninstall` | Implemented for desktop | Reversibly manage the verified Codex hook and per-user Windows/macOS startup artifacts. |
-| Other `doctor` checks | Planned | Report broader agent, IPC, storage, and notification status. |
-| `test` | Implemented for desktop | Submit an explicit synthetic task-completion or approval-request event over local IPC. |
-| `status` | Implemented for desktop | Show installation, agent, queue, delivery, and native-notification status without event content. |
+| `doctor` | Implemented for desktop and relay | Read-only configuration, Codex, agent, IPC, storage, notification, OpenSSH, and target checks. |
+| `test` | Implemented for desktop and relay | Submit either explicit synthetic event and wait for its local or remote desktop delivery receipt. |
+| `status` | Implemented for desktop and relay | Show role, installation, agent, queue age/counts, delivery time, storage, and native status without event content. |
 
 ### Local desktop lifecycle
 
@@ -483,8 +485,8 @@ Stage 14 provides the current source-built Windows and macOS interface:
 
 ```text
 codex-notifier install [--codex-version 0.144.5]
-codex-notifier status
-codex-notifier test [task-completed|approval-requested]
+codex-notifier status [--format human|json]
+codex-notifier test [task-completed|approval-requested] [--format human|json] [--wait-ms 100..180000]
 codex-notifier uninstall
 codex-notifier agent
 ```
@@ -500,7 +502,7 @@ though `test approval-requested` can verify the local notification route.
 
 Reinstallation replaces the previously owned hook and application atomically,
 without adding duplicate hooks or startup entries. `status` reports only
-bounded metadata. `uninstall` removes the exact managed hook, startup identity,
+bounded metadata and uses read-only SQLite inspection. `uninstall` removes the exact managed hook, startup identity,
 application, and unchanged installer-created configuration; it preserves
 pre-existing or modified hook/configuration content and always retains the
 SQLite queue, receipts, and notification history. On Windows, run `uninstall`
@@ -598,6 +600,36 @@ and reversible removal are documented in
 [`docs/relay-ssh.md`](docs/relay-ssh.md). The executed evidence is in
 [`docs/verification/stage-16.md`](docs/verification/stage-16.md).
 
+### Diagnostics, status, and self-test
+
+Stage 17 adds the role-aware operational surface:
+
+```text
+codex-notifier doctor [--format human|json]
+codex-notifier status [--format human|json]
+codex-notifier test [task-completed|approval-requested] [--format human|json] [--wait-ms 100..180000]
+```
+
+`doctor` checks configuration, fixture-gated Codex support, agent state,
+same-user IPC, read-only SQLite state, and the role-specific native notification
+or OpenSSH path. It does not create or migrate state, change Codex/SSH/startup
+configuration, request notification permission, or send an event. The relay
+target probe sends empty stdin and accepts only the receiver's fixed
+`malformed_json` rejection, so reachability testing cannot enter either queue.
+
+`test` submits generic private text through normal IPC and waits for its stable
+event ID to reach a receipt or dead letter. A local receipt follows native
+adapter acceptance. For a relay, the restricted receiver waits for the desktop
+native receipt and returns `delivered`; pending desktop work remains retryable.
+Human lines and compact schema-v1 JSON use the same typed status, code, exit
+code, and fixed remediation. They exclude event text, source/user/host labels,
+keys, raw SSH errors, profiles, and machine paths.
+
+The complete check order, field contract, self-test semantics, remediation, and
+exit-code table are in [`docs/diagnostics.md`](docs/diagnostics.md). Stage 17
+execution evidence is in
+[`docs/verification/stage-17.md`](docs/verification/stage-17.md).
+
 ### Codex event emit
 
 The Stage 10 executable entry reads one raw Codex `Stop` hook JSON object from
@@ -636,7 +668,8 @@ codex-notifier doctor codex --codex-version 0.144.5 --interface <cli-hook|app-se
 
 It reports stable support and installation states without reading transcripts,
 terminal output, credentials, or user configuration. Unknown version text is
-not echoed. Broader diagnostics remain assigned to Stage 17.
+not echoed. The comprehensive `doctor` command composes this capability with
+the Stage 17 operational checks.
 
 ## Repository Layout
 

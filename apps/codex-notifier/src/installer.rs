@@ -4,14 +4,17 @@ use std::path::Path;
 use std::time::Duration;
 
 use codex_notifier_codex_source::{CapabilityAvailability, CodexCapabilityReport, CodexInterface};
+use codex_notifier_config::Role;
 use codex_notifier_native_notification::NotificationDiagnostic;
-use codex_notifier_persistence::{SqliteStore, StorePolicy};
+use codex_notifier_persistence::SqliteStore;
 use thiserror::Error;
+use time::OffsetDateTime;
 
 use crate::database_path;
 use crate::desktop::{
     AgentStatus, DesktopError, current_config_paths, load_config_or_defaults,
-    notification_diagnostic, read_agent_status, request_agent_shutdown,
+    load_config_or_defaults_read_only, notification_diagnostic, read_agent_status,
+    request_agent_shutdown,
 };
 use crate::lifecycle::{
     InstallManifest, LifecycleError, ManagedRemovalReport, install_managed_documents,
@@ -99,6 +102,8 @@ pub struct UninstallReport {
 /// Read-only installed state without payload or machine paths.
 #[derive(Clone, Debug)]
 pub struct StatusReport {
+    /// Configured runtime role.
+    pub role: Role,
     /// Whether a valid ownership manifest exists.
     pub installed: bool,
     /// Recorded installed version, when present.
@@ -113,14 +118,51 @@ pub struct StatusReport {
     pub delivery_receipts: Option<usize>,
     /// Metadata-only dead-letter count, if an existing database could be opened.
     pub dead_letters: Option<usize>,
+    /// Age of the oldest queued event at inspection time, in milliseconds.
+    pub oldest_queued_age_ms: Option<u64>,
+    /// Most recent successful delivery time in Unix milliseconds.
+    pub latest_delivery_at_ms: Option<i64>,
+    /// Read-only storage inspection status.
+    pub storage: StatusStorage,
+    /// Stable storage failure code when inspection failed.
+    pub storage_error: Option<&'static str>,
     /// Current native diagnostic when configuration is valid.
     pub notification: Option<NotificationDiagnostic>,
+    /// Stable native diagnostic failure when the desktop check could not run.
+    pub notification_error: Option<String>,
+}
+
+/// Read-only state-directory and database availability.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StatusStorage {
+    /// The state directory and optional database are readable.
+    Ready,
+    /// The state directory does not exist yet.
+    Missing,
+    /// Existing state could not be inspected safely.
+    Unavailable,
+}
+
+impl StatusStorage {
+    /// Returns the stable machine-readable status.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Missing => "missing",
+            Self::Unavailable => "unavailable",
+        }
+    }
 }
 
 struct QueueStatus {
     pending: Option<usize>,
     receipts: Option<usize>,
     dead_letters: Option<usize>,
+    oldest_queued_age_ms: Option<u64>,
+    latest_delivery_at_ms: Option<i64>,
+    storage: StatusStorage,
+    error: Option<&'static str>,
 }
 
 /// Installs or upgrades the current executable for a local desktop user.
@@ -224,22 +266,40 @@ pub async fn uninstall() -> Result<UninstallReport, InstallerError> {
 /// Returns stable path, manifest, configuration, or queue errors.
 pub fn status() -> Result<StatusReport, InstallerError> {
     let config_paths = current_config_paths()?;
-    let config = load_config_or_defaults(&config_paths)?;
-    let platform_paths = current_platform_paths(&config_paths, config.storage().state_dir())?;
-    let manifest = read_manifest(platform_paths.lifecycle())?;
-    let queue = queue_status(
-        config.storage().state_dir(),
-        config.storage().max_queue_entries(),
-    )?;
+    let config = load_config_or_defaults_read_only(&config_paths)?;
+    let (manifest, startup_registered) = if config.agent().role() == Role::Desktop {
+        let platform_paths = current_platform_paths(&config_paths, config.storage().state_dir())?;
+        (
+            read_manifest(platform_paths.lifecycle())?,
+            startup_resource_exists(&platform_paths),
+        )
+    } else {
+        (None, false)
+    };
+    let queue = queue_status(config.storage().state_dir());
+    let (notification, notification_error) = if config.agent().role() == Role::Desktop {
+        match notification_diagnostic(&config) {
+            Ok(value) => (Some(value), None),
+            Err(error) => (None, Some(error.code().to_owned())),
+        }
+    } else {
+        (None, None)
+    };
     Ok(StatusReport {
+        role: config.agent().role(),
         installed: manifest.is_some(),
         version: manifest.map(|value| value.install_version().to_owned()),
-        startup_registered: startup_resource_exists(&platform_paths),
+        startup_registered,
         agent: read_agent_status(config.storage().state_dir()),
         queue_pending: queue.pending,
         delivery_receipts: queue.receipts,
         dead_letters: queue.dead_letters,
-        notification: notification_diagnostic(&config).ok(),
+        oldest_queued_age_ms: queue.oldest_queued_age_ms,
+        latest_delivery_at_ms: queue.latest_delivery_at_ms,
+        storage: queue.storage,
+        storage_error: queue.error,
+        notification,
+        notification_error,
     })
 }
 
@@ -349,32 +409,70 @@ fn unix_quote(value: &str) -> Result<String, InstallerError> {
     Ok(format!("'{}'", value.replace('\'', "'\\''")))
 }
 
-fn queue_status(state_dir: &Path, limit: usize) -> Result<QueueStatus, InstallerError> {
+fn queue_status(state_dir: &Path) -> QueueStatus {
     let database = database_path(state_dir);
-    if !database.exists() {
-        return Ok(QueueStatus {
-            pending: Some(0),
-            receipts: Some(0),
-            dead_letters: Some(0),
-        });
+    let state_exists = match state_dir.symlink_metadata() {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return unavailable_queue("storage_unwritable");
+        }
+        Ok(metadata) if metadata.permissions().readonly() => {
+            return unavailable_queue("storage_unwritable");
+        }
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => return unavailable_queue("storage_unwritable"),
+    };
+    match database.symlink_metadata() {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return QueueStatus {
+                pending: Some(0),
+                receipts: Some(0),
+                dead_letters: Some(0),
+                oldest_queued_age_ms: None,
+                latest_delivery_at_ms: None,
+                storage: if state_exists {
+                    StatusStorage::Ready
+                } else {
+                    StatusStorage::Missing
+                },
+                error: None,
+            };
+        }
+        Err(_) => return unavailable_queue("storage_unwritable"),
+        Ok(_) => {}
     }
-    let policy = StorePolicy::default()
-        .with_queue_limit(limit)
-        .map_err(|_| InstallerError::QueueStatus)?;
-    let store = SqliteStore::open(&database, policy).map_err(|_| InstallerError::QueueStatus)?;
-    Ok(QueueStatus {
-        pending: Some(store.queue_len().map_err(|_| InstallerError::QueueStatus)?),
-        receipts: Some(
-            store
-                .receipt_count()
-                .map_err(|_| InstallerError::QueueStatus)?,
-        ),
-        dead_letters: Some(
-            store
-                .dead_letter_count()
-                .map_err(|_| InstallerError::QueueStatus)?,
-        ),
-    })
+    if !state_exists {
+        return unavailable_queue("storage_unwritable");
+    }
+    match SqliteStore::inspect_read_only(&database) {
+        Ok(snapshot) => {
+            let now_ms = OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000;
+            QueueStatus {
+                pending: Some(snapshot.queue_entries()),
+                receipts: Some(snapshot.receipt_entries()),
+                dead_letters: Some(snapshot.dead_letter_entries()),
+                oldest_queued_age_ms: snapshot.oldest_enqueued_at_ms().map(|timestamp| {
+                    u64::try_from(now_ms.saturating_sub(i128::from(timestamp))).unwrap_or(u64::MAX)
+                }),
+                latest_delivery_at_ms: snapshot.latest_delivered_at_ms(),
+                storage: StatusStorage::Ready,
+                error: None,
+            }
+        }
+        Err(error) => unavailable_queue(error.code().as_str()),
+    }
+}
+
+fn unavailable_queue(error: &'static str) -> QueueStatus {
+    QueueStatus {
+        pending: None,
+        receipts: None,
+        dead_letters: None,
+        oldest_queued_age_ms: None,
+        latest_delivery_at_ms: None,
+        storage: StatusStorage::Unavailable,
+        error: Some(error),
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -431,6 +529,19 @@ mod tests {
             Err(InstallerError::Platform(PlatformError::FileSystem))
         ));
         assert!(restored.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn status_rejects_an_unsafe_database_type_without_modifying_it() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let state_dir = directory.path().join("state");
+        std::fs::create_dir_all(database_path(&state_dir)).expect("database-shaped directory");
+
+        let report = queue_status(&state_dir);
+
+        assert_eq!(report.storage, StatusStorage::Unavailable);
+        assert_eq!(report.error, Some("storage_unwritable"));
+        assert!(database_path(&state_dir).is_dir());
     }
 
     #[cfg(windows)]
