@@ -311,7 +311,7 @@ jobs:
         run: exit 1
 
   macos:
-    name: ${{ matrix.name }} notification UI service
+    name: ${{ matrix.name }} ${{ matrix.scenario }} notification UI service
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -319,8 +319,16 @@ jobs:
         include:
           - name: macOS 14
             os: macos-14
+            scenario: grant
           - name: macOS latest
             os: macos-latest
+            scenario: grant
+          - name: macOS 14
+            os: macos-14
+            scenario: denial
+          - name: macOS latest
+            os: macos-latest
+            scenario: denial
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -552,6 +560,7 @@ jobs:
           } >>"$GITHUB_ENV"
 
       - name: Exercise authorization and delivery
+        if: matrix.scenario == 'grant'
         id: macos-smoke
         continue-on-error: true
         shell: bash
@@ -825,6 +834,177 @@ jobs:
           cat target/macos-smoke.log
           exit "$result"
 
+      - name: Exercise explicit authorization denial
+        if: matrix.scenario == 'denial'
+        id: macos-denial
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          CODEX_NOTIFIER_MACOS_SMOKE_ROOT=/Applications \
+            CODEX_NOTIFIER_MACOS_SIGNING_IDENTITY="$CODEX_NOTIFIER_MACOS_SIGNING_IDENTITY" \
+            cargo test -p codex-notifier-native-notification \
+            --test macos_smoke \
+            reports_real_denied_authorization \
+            -- --ignored --exact --nocapture \
+            >target/macos-denial.log 2>&1 &
+          smoke_pid=$!
+
+          banner_hovered=''
+          banner_pressed=''
+          notification_denied=''
+          screen_pressed=''
+          for attempt in $(seq 1 80); do
+            CODEX_PROBE_SCREENSHOT="$PWD/target/macos-denial-prompt.png" \
+              CODEX_PROBE_CLICK_HELPER="$PWD/target/macos-probe-click" \
+              CODEX_PROBE_BANNER_HOVERED="$banner_hovered" \
+              CODEX_PROBE_BANNER_PRESSED="$banner_pressed" \
+              CODEX_PROBE_NOTIFICATION_DENIED="$notification_denied" \
+              CODEX_PROBE_SCREEN_PRESSED="$screen_pressed" \
+              osascript >target/macos-denial-ui-current.txt 2>&1 <<'APPLESCRIPT'
+          tell application "System Events"
+              set observations to ""
+              set clickHelper to system attribute "CODEX_PROBE_CLICK_HELPER"
+              set bannerHovered to system attribute "CODEX_PROBE_BANNER_HOVERED"
+              set bannerPressed to system attribute "CODEX_PROBE_BANNER_PRESSED"
+              set notificationDenied to system attribute "CODEX_PROBE_NOTIFICATION_DENIED"
+              set screenPressed to system attribute "CODEX_PROBE_SCREEN_PRESSED"
+              repeat with candidateProcess in application processes
+                  try
+                      set processName to name of candidateProcess as text
+                      if processName is "NotificationCenter" or (processName is "UserNotificationCenter" and screenPressed is not "1") then
+                          set observations to observations & " process=" & processName & " windows=" & (count windows of candidateProcess)
+                          repeat with candidateWindow in windows of candidateProcess
+                              set candidateElements to entire contents of candidateWindow
+                              set windowText to ""
+                              repeat with candidateElement in candidateElements
+                                  try
+                                      set windowText to windowText & " " & (name of candidateElement as text)
+                                  end try
+                                  try
+                                      set windowText to windowText & " " & (value of candidateElement as text)
+                                  end try
+                              end repeat
+                              set observations to observations & " text=" & windowText
+                              if processName is "UserNotificationCenter" and windowText contains "screen and audio" then
+                                  repeat with candidateElement in candidateElements
+                                      try
+                                          if screenPressed is not "1" and role of candidateElement is "AXButton" and name of candidateElement is "Allow" then
+                                              set buttonPosition to position of candidateElement
+                                              set buttonSize to size of candidateElement
+                                              set clickX to (item 1 of buttonPosition) + ((item 1 of buttonSize) div 2)
+                                              set clickY to (item 2 of buttonPosition) + ((item 2 of buttonSize) div 2)
+                                              do shell script quoted form of clickHelper & " click " & clickX & " " & clickY
+                                              return "pressed=screen-coordinate x=" & clickX & " y=" & clickY
+                                          end if
+                                      end try
+                                  end repeat
+                              end if
+                              if processName is "NotificationCenter" and windowText contains "Codex Notifier" and windowText contains "Notifications" then
+                                  repeat with candidateElement in candidateElements
+                                      try
+                                          set buttonName to name of candidateElement as text
+                                          if notificationDenied is not "1" and role of candidateElement is "AXButton" and (buttonName is "Don't Allow" or buttonName is "Don’t Allow") then
+                                              set screenshotPath to system attribute "CODEX_PROBE_SCREENSHOT"
+                                              do shell script "/usr/sbin/screencapture -x " & quoted form of screenshotPath
+                                              perform action "AXPress" of candidateElement
+                                              return "denied=notification process=" & processName & " button=" & buttonName
+                                          end if
+                                      end try
+                                  end repeat
+                                  repeat with candidateElement in candidateElements
+                                      try
+                                          set elementText to ""
+                                          try
+                                              set elementText to elementText & " " & (name of candidateElement as text)
+                                          end try
+                                          try
+                                              set elementText to elementText & " " & (value of candidateElement as text)
+                                          end try
+                                          if bannerPressed is not "1" and (elementText contains "Codex Notifier" or elementText contains "Notifications may include") then
+                                              set screenshotPath to system attribute "CODEX_PROBE_SCREENSHOT"
+                                              do shell script "/usr/sbin/screencapture -x " & quoted form of screenshotPath
+                                              set elementPosition to position of candidateElement
+                                              set elementSize to size of candidateElement
+                                              set clickX to (item 1 of elementPosition) + ((item 1 of elementSize) div 2)
+                                              set clickY to (item 2 of elementPosition) + ((item 2 of elementSize) div 2)
+                                              if bannerHovered is not "1" then
+                                                  do shell script quoted form of clickHelper & " move " & clickX & " " & clickY
+                                                  return "hovered=banner-coordinate process=" & processName & " x=" & clickX & " y=" & clickY
+                                              end if
+                                              do shell script quoted form of clickHelper & " click " & clickX & " " & clickY
+                                              return "pressed=banner-coordinate process=" & processName & " x=" & clickX & " y=" & clickY
+                                          end if
+                                      end try
+                                  end repeat
+                              end if
+                          end repeat
+                      end if
+                  on error errorMessage
+                      set observations to observations & " process-error=" & errorMessage
+                  end try
+              end repeat
+              return "notification denial control not found" & observations
+          end tell
+          APPLESCRIPT
+            cat target/macos-denial-ui-current.txt >target/macos-denial-ui.txt
+            cat target/macos-denial-ui-current.txt >>target/macos-denial-ui-history.txt
+            if grep -q '^pressed=screen-coordinate' target/macos-denial-ui-current.txt; then
+              screen_pressed=1
+              sleep 1
+              continue
+            fi
+            if grep -q '^hovered=banner-coordinate' target/macos-denial-ui-current.txt; then
+              banner_hovered=1
+              sleep 2
+              continue
+            fi
+            if grep -q '^pressed=banner-coordinate' target/macos-denial-ui-current.txt; then
+              banner_pressed=1
+              sleep 1
+              continue
+            fi
+            if grep -q '^denied=notification' target/macos-denial-ui-current.txt; then
+              notification_denied=1
+              sleep 1
+              continue
+            fi
+            if ! kill -0 "$smoke_pid" 2>/dev/null; then
+              break
+            fi
+            sleep 0.5
+          done
+
+          result=''
+          for attempt in $(seq 1 80); do
+            if ! kill -0 "$smoke_pid" 2>/dev/null; then
+              wait "$smoke_pid"
+              result=$?
+              break
+            fi
+            sleep 0.5
+          done
+          if [[ -z "$result" ]]; then
+            echo "Denial smoke timed out banner_hovered=$banner_hovered banner_pressed=$banner_pressed notification_denied=$notification_denied screen_pressed=$screen_pressed" \
+              >>target/macos-denial.log
+            kill "$smoke_pid" 2>/dev/null
+            pkill -f codex-notifier-macos-smoke 2>/dev/null
+            wait "$smoke_pid" 2>/dev/null
+            result=124
+          fi
+          if [[ "$result" -eq 0 && "$banner_pressed" != 1 && "$notification_denied" != 1 ]]; then
+            echo 'Denial smoke lacked an explicit permission UI action' \
+              >>target/macos-denial.log
+            result=125
+          fi
+
+          log show --last 4m --style compact \
+            --predicate 'process == "codex-notifier-macos-smoke" OR process == "NotificationCenter" OR process == "UserNotificationCenter" OR process == "usernoted" OR process == "usernotificationsd" OR subsystem CONTAINS "UserNotifications"' \
+            >target/macos-denial-unified.log 2>&1 || true
+          cat target/macos-denial-ui.txt
+          cat target/macos-denial.log
+          exit "$result"
+
       - name: Remove temporary code-signing identity
         if: always()
         shell: bash
@@ -876,10 +1056,14 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.os }}-session-services
+          name: ${{ matrix.os }}-${{ matrix.scenario }}-session-services
           path: target/macos-*
           if-no-files-found: error
 
-      - name: Require macOS smoke success
-        if: steps.macos-smoke.outcome != 'success'
+      - name: Require macOS grant smoke success
+        if: matrix.scenario == 'grant' && steps.macos-smoke.outcome != 'success'
+        run: exit 1
+
+      - name: Require macOS denial smoke success
+        if: matrix.scenario == 'denial' && steps.macos-denial.outcome != 'success'
         run: exit 1

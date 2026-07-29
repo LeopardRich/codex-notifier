@@ -41,6 +41,7 @@ mod macos {
     const SIGNING_IDENTITY_ENV: &str = "CODEX_NOTIFIER_MACOS_SIGNING_IDENTITY";
     const SIGNING_KEYCHAIN_ENV: &str = "CODEX_NOTIFIER_MACOS_SIGNING_KEYCHAIN";
     const TEST_NAME: &str = "displays_task_completion_and_approval_request_notifications";
+    const DENIAL_TEST_NAME: &str = "reports_real_denied_authorization";
     const NO_GUI_TEST_NAME: &str = "reports_real_no_gui_session";
     const EXECUTABLE_NAME: &str = "codex-notifier-macos-smoke";
     const AUTHORIZATION_TIMEOUT: Duration = Duration::from_secs(120);
@@ -49,12 +50,18 @@ mod macos {
         let arguments = std::env::args().skip(1).collect::<Vec<_>>();
         if arguments.iter().any(|argument| argument == "--list") {
             println!("{TEST_NAME}: test");
+            println!("{DENIAL_TEST_NAME}: test");
             println!("{NO_GUI_TEST_NAME}: test");
             println!("reports_real_missing_application_identity: test");
             return;
         }
         if arguments.iter().any(|argument| argument == TEST_NAME) {
             displays_task_completion_and_approval_request_notifications();
+        } else if arguments
+            .iter()
+            .any(|argument| argument == DENIAL_TEST_NAME)
+        {
+            reports_real_denied_authorization();
         } else if arguments
             .iter()
             .any(|argument| argument == NO_GUI_TEST_NAME)
@@ -88,7 +95,7 @@ mod macos {
             return;
         }
 
-        request_authorization_with_application_run_loop();
+        request_authorization_with_application_run_loop(AuthorizationExpectation::Grant);
         let backend = Arc::new(MacOsNotificationBackend::codex_notifier());
         let diagnostic = backend.diagnose();
         assert_eq!(
@@ -132,6 +139,18 @@ mod macos {
         );
     }
 
+    fn reports_real_denied_authorization() {
+        if !running_from_application_bundle() {
+            relaunch_in_product_bundle(DENIAL_TEST_NAME, None);
+            return;
+        }
+
+        request_authorization_with_application_run_loop(AuthorizationExpectation::Denial);
+        if let Some(path) = std::env::var_os(RESULT_PATH_ENV) {
+            fs::write(path, b"ok").expect("write successful macOS denial result");
+        }
+    }
+
     fn reports_real_no_gui_session() {
         if !running_from_application_bundle() {
             relaunch_in_product_bundle(NO_GUI_TEST_NAME, Some("nobody"));
@@ -147,7 +166,13 @@ mod macos {
         );
     }
 
-    fn request_authorization_with_application_run_loop() {
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum AuthorizationExpectation {
+        Grant,
+        Denial,
+    }
+
+    fn request_authorization_with_application_run_loop(expectation: AuthorizationExpectation) {
         let main_thread = MainThreadMarker::new().expect("smoke app must start on the main thread");
         let application = NSApplication::sharedApplication(main_thread);
         application.finishLaunching();
@@ -185,6 +210,17 @@ mod macos {
                 Ok((granted, error_free)) => {
                     if !error_free || !granted {
                         let diagnostic = MacOsNotificationBackend::codex_notifier().diagnose();
+                        if expectation == AuthorizationExpectation::Denial {
+                            assert_eq!(
+                                diagnostic.status(),
+                                NotificationStatus::DisabledForApplication,
+                                "macOS denial diagnostic: {diagnostic:?}"
+                            );
+                            eprintln!(
+                                "macOS notification authorization denied as expected; granted={granted}, error_free={error_free}, diagnostic={diagnostic:?}"
+                            );
+                            break;
+                        }
                         if recover_authorization {
                             eprintln!(
                                 "macOS notification authorization requires System Settings recovery; granted={granted}, error_free={error_free}, diagnostic={diagnostic:?}"
@@ -197,6 +233,11 @@ mod macos {
                         }
                     }
                     if granted && error_free {
+                        assert_eq!(
+                            expectation,
+                            AuthorizationExpectation::Grant,
+                            "macOS unexpectedly granted authorization in the denial smoke test"
+                        );
                         break;
                     }
                 }
