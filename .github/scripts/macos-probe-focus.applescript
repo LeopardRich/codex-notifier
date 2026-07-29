@@ -19,6 +19,48 @@ on findControlCenterMenuItem(controlCenterProcess)
     error "Control Center menu item not found"
 end findControlCenterMenuItem
 
+on findFocusControl(controlCenterWindow)
+    tell application "System Events"
+        set windowPosition to position of controlCenterWindow
+        set windowSize to size of controlCenterWindow
+        set windowLeft to item 1 of windowPosition
+        set windowTop to item 2 of windowPosition
+        set windowWidth to item 1 of windowSize
+        set windowHeight to item 2 of windowSize
+        set expectedX to windowLeft + ((windowWidth * 3) div 4)
+        if windowHeight > 450 then
+            set expectedY to windowTop + ((windowHeight * 56) div 100)
+        else
+            set expectedY to windowTop + ((windowHeight * 11) div 100)
+        end if
+
+        set bestDetails to missing value
+        set bestDistance to 100000000
+        set candidateElements to entire contents of controlCenterWindow
+        repeat with candidateElement in candidateElements
+            try
+                if role of candidateElement is "AXCheckBox" then
+                    set elementPosition to position of candidateElement
+                    set elementSize to size of candidateElement
+                    set centerX to (item 1 of elementPosition) + ((item 1 of elementSize) div 2)
+                    set centerY to (item 2 of elementPosition) + ((item 2 of elementSize) div 2)
+                    set deltaX to centerX - expectedX
+                    set deltaY to centerY - expectedY
+                    set candidateDistance to (deltaX * deltaX) + (deltaY * deltaY)
+                    if candidateDistance < bestDistance then
+                        set bestDistance to candidateDistance
+                        set bestDetails to {value of candidateElement as text, elementPosition, elementSize, centerX, centerY}
+                    end if
+                end if
+            end try
+        end repeat
+        if bestDetails is missing value then
+            error "Focus control not found near the expected Control Center position"
+        end if
+        return bestDetails
+    end tell
+end findFocusControl
+
 on run arguments
     if (count arguments) is not 1 or item 1 of arguments is not in {"enable", "disable"} then
         error "usage: macos-probe-focus.applescript <enable|disable>"
@@ -28,6 +70,10 @@ on run arguments
         set targetValue to "1"
     else
         set targetValue to "0"
+    end if
+    set clickHelper to system attribute "CODEX_PROBE_CLICK_HELPER"
+    if clickHelper is "" then
+        error "CODEX_PROBE_CLICK_HELPER is not set"
     end if
 
     tell application "System Events"
@@ -44,39 +90,22 @@ on run arguments
             error "Control Center window did not open"
         end if
 
-        set controlCenterWindow to window 1 of controlCenterProcess
-        set windowPosition to position of controlCenterWindow
-        set windowSize to size of controlCenterWindow
-        set midpointX to (item 1 of windowPosition) + ((item 1 of windowSize) div 2)
-        set midpointY to (item 2 of windowPosition) + ((item 2 of windowSize) div 2)
-        set focusControl to missing value
-        set focusControlY to 100000
-        set candidateElements to entire contents of controlCenterWindow
-        repeat with candidateElement in candidateElements
-            try
-                if role of candidateElement is "AXCheckBox" then
-                    set elementPosition to position of candidateElement
-                    set elementX to item 1 of elementPosition
-                    set elementY to item 2 of elementPosition
-                    if elementX is greater than or equal to midpointX and elementY < midpointY and elementY < focusControlY then
-                        set focusControl to candidateElement
-                        set focusControlY to elementY
-                    end if
-                end if
-            end try
-        end repeat
-        if focusControl is missing value then
-            error "Focus control not found in the top-right Control Center region"
-        end if
-
-        set valueBefore to value of focusControl as text
-        set focusPosition to position of focusControl
-        set focusSize to size of focusControl
+        set beforeDetails to my findFocusControl(window 1 of controlCenterProcess)
+        set valueBefore to item 1 of beforeDetails
+        set focusPosition to item 2 of beforeDetails
+        set focusSize to item 3 of beforeDetails
+        set clickX to item 4 of beforeDetails
+        set clickY to item 5 of beforeDetails
         if valueBefore is not targetValue then
-            perform action "AXPress" of focusControl
+            do shell script quoted form of clickHelper & " click " & clickX & " " & clickY
             delay 2
         end if
-        set valueAfter to value of focusControl as text
+        if (count windows of controlCenterProcess) is 0 then
+            perform action "AXPress" of controlCenterItem
+            delay 2
+        end if
+        set afterDetails to my findFocusControl(window 1 of controlCenterProcess)
+        set valueAfter to item 1 of afterDetails
         if valueAfter is not targetValue then
             error "Focus control did not reach requested value " & targetValue & "; before=" & valueBefore & ", after=" & valueAfter
         end if
