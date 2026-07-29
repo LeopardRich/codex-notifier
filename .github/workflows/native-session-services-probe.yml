@@ -517,6 +517,45 @@ jobs:
             -k "$keychain" \
             -P "$keychain_password" \
             -T /usr/bin/codesign
+          root_identity=$(/usr/bin/openssl x509 \
+            -in "$signing_directory/root.pem" \
+            -noout \
+            -fingerprint \
+            -sha1 | cut -d= -f2 | tr -d ':')
+          {
+            echo "CODEX_NOTIFIER_MACOS_SIGNING_KEYCHAIN=$keychain"
+            echo "CODEX_NOTIFIER_MACOS_SIGNING_DIRECTORY=$signing_directory"
+            echo "CODEX_NOTIFIER_MACOS_SIGNING_ROOT_IDENTITY=$root_identity"
+          } >>"$GITHUB_ENV"
+          sudo security add-trusted-cert \
+            -d \
+            -r trustRoot \
+            -k /Library/Keychains/System.keychain \
+            "$signing_directory/root.pem" \
+            >target/macos-signing-trust.txt 2>&1 &
+          trust_pid=$!
+          trust_result=''
+          for attempt in $(seq 1 100); do
+            if ! kill -0 "$trust_pid" 2>/dev/null; then
+              set +e
+              wait "$trust_pid"
+              trust_result=$?
+              set -e
+              break
+            fi
+            sleep 0.1
+          done
+          if [[ -z "$trust_result" ]]; then
+            kill "$trust_pid" 2>/dev/null || true
+            wait "$trust_pid" 2>/dev/null || true
+            echo 'System trust installation timed out' \
+              >>target/macos-signing-trust.txt
+            exit 1
+          fi
+          if [[ "$trust_result" -ne 0 ]]; then
+            cat target/macos-signing-trust.txt
+            exit "$trust_result"
+          fi
           security set-key-partition-list \
             -S apple-tool:,apple: \
             -s \
@@ -525,7 +564,11 @@ jobs:
           security list-keychains -d user -s "$keychain" "$login_keychain"
 
           security find-identity -v -p codesigning "$keychain" \
-            >target/macos-signing-identities.txt || true
+            >target/macos-signing-identities.txt
+          if ! grep -q "$identity_name" target/macos-signing-identities.txt; then
+            cat target/macos-signing-identities.txt
+            exit 1
+          fi
           security find-certificate -a -Z -c "$identity_name" "$keychain" \
             >target/macos-signing-keychain-certificate.txt
           identity=$(/usr/bin/openssl x509 \
@@ -548,8 +591,6 @@ jobs:
             >target/macos-signing-certificate.txt
           {
             echo "CODEX_NOTIFIER_MACOS_SIGNING_IDENTITY=$identity"
-            echo "CODEX_NOTIFIER_MACOS_SIGNING_KEYCHAIN=$keychain"
-            echo "CODEX_NOTIFIER_MACOS_SIGNING_DIRECTORY=$signing_directory"
           } >>"$GITHUB_ENV"
 
       - name: Exercise authorization and delivery
@@ -656,6 +697,17 @@ jobs:
           login_keychain=$(security default-keychain -d user | tr -d '"')
           if [[ -n "$login_keychain" ]]; then
             security list-keychains -d user -s "$login_keychain"
+          fi
+          if [[ -n "${CODEX_NOTIFIER_MACOS_SIGNING_DIRECTORY:-}" ]] &&
+            [[ -f "$CODEX_NOTIFIER_MACOS_SIGNING_DIRECTORY/root.pem" ]]; then
+            sudo security remove-trusted-cert \
+              -d \
+              "$CODEX_NOTIFIER_MACOS_SIGNING_DIRECTORY/root.pem"
+          fi
+          if [[ -n "${CODEX_NOTIFIER_MACOS_SIGNING_ROOT_IDENTITY:-}" ]]; then
+            sudo security delete-certificate \
+              -Z "$CODEX_NOTIFIER_MACOS_SIGNING_ROOT_IDENTITY" \
+              /Library/Keychains/System.keychain
           fi
           if [[ -n "${CODEX_NOTIFIER_MACOS_SIGNING_DIRECTORY:-}" ]]; then
             rm -rf "$CODEX_NOTIFIER_MACOS_SIGNING_DIRECTORY"
