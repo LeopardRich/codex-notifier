@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(any(windows, target_os = "macos"))]
 use std::process::{Command, Stdio};
 
 use codex_notifier_config::ConfigPaths;
@@ -9,11 +10,15 @@ use thiserror::Error;
 
 use crate::lifecycle::{InstallManifest, LifecycleLayout, PlatformOwnership};
 
+#[cfg(any(windows, target_os = "macos"))]
 const PRODUCT_NAME: &str = "Codex Notifier";
+#[cfg(any(windows, target_os = "macos"))]
 const PRODUCT_FILE_NAME: &str = "codex-notifier";
 #[cfg(target_os = "macos")]
 const MACOS_LABEL: &str = "io.github.leopardrich.codex-notifier";
+#[cfg(windows)]
 const WINDOWS_APP_ID: &str = "LeopardRich.CodexNotifier";
+#[cfg(windows)]
 const WINDOWS_RUN_VALUE: &str = "CodexNotifier";
 
 /// Exact platform paths used by installation and startup.
@@ -380,6 +385,7 @@ fn remove_tree(path: &Path) -> Result<(), PlatformError> {
     }
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 fn required_absolute_env(name: &str) -> Result<PathBuf, PlatformError> {
     let path = std::env::var_os(name)
         .map(PathBuf::from)
