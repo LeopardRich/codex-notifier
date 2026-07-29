@@ -63,6 +63,7 @@ enum DoctorCommand {
 }
 
 struct SshDoctorCommand {
+    ssh_config: Option<PathBuf>,
     known_hosts: Option<PathBuf>,
     authorized_keys: Option<PathBuf>,
 }
@@ -295,7 +296,11 @@ fn run_ssh_doctor(command: &SshDoctorCommand) -> Result<(), CommandError> {
         .authorized_keys
         .as_deref()
         .unwrap_or(&default_authorized_keys);
-    let host_key = diagnose_host_key(config.relay().ssh_host_alias(), known_hosts);
+    let host_key = diagnose_host_key(
+        config.relay().ssh_host_alias(),
+        known_hosts,
+        command.ssh_config.as_deref(),
+    );
     let authorized_keys = diagnose_authorized_keys(authorized_keys);
     println!(
         "host_key={}\nauthorized_keys={}",
@@ -431,9 +436,11 @@ fn parse_ssh_doctor(
 ) -> Result<DoctorCommand, CommandError> {
     let mut known_hosts = None;
     let mut authorized_keys = None;
+    let mut ssh_config = None;
     while let Some(flag) = arguments.next() {
         let value = PathBuf::from(arguments.next().ok_or(CommandError::Arguments)?);
         let target = match flag.as_str() {
+            "--ssh-config" => &mut ssh_config,
             "--known-hosts" => &mut known_hosts,
             "--authorized-keys" => &mut authorized_keys,
             _ => return Err(CommandError::Arguments),
@@ -443,6 +450,7 @@ fn parse_ssh_doctor(
         }
     }
     Ok(DoctorCommand::Ssh(SshDoctorCommand {
+        ssh_config,
         known_hosts,
         authorized_keys,
     }))

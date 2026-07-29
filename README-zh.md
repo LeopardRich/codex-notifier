@@ -6,7 +6,7 @@
 Codex 事件转换为 Windows 或 macOS 原生系统通知，并支持 Codex 运行在远程
 服务器上的场景。
 
-> 当前状态：阶段 01-14 已完成，兼容性证据、架构决策、Rust workspace、三平台
+> 当前状态：阶段 01-15 已完成，兼容性证据、架构决策、Rust workspace、三平台
 > 质量门禁、规范事件领域模型、分层配置、跨平台路径规则与结构化脱敏日志模型均已
 > 建立，事务性 SQLite 发件箱/去重存储、有界的用户级本地 IPC、角色感知 agent
 > 生命周期、持久背压和有界 worker 排空也已完成；Codex CLI 0.144.5 的 CLI
@@ -18,7 +18,10 @@ Codex 事件转换为 Windows 或 macOS 原生系统通知，并支持 Codex 运
 > 实现；首次授权、明确拒绝、两类事件横幅与勿扰抑制已在 macOS 14.8.7 和当前
 > macOS 26.4 runner 上验证。本地桌面端生命周期现已支持安装精确验证过的任务完成
 > hook 与用户级自启动资源、运行 agent、查看状态、提交两类显式测试事件、幂等升级，
-> 并在保留事件状态与用户修改的前提下卸载自有资源。SSH 尚未实现。
+> 并在保留事件状态与用户修改的前提下卸载自有资源。受限 SSH `receive` 边界、脱敏
+> 确认、专用 forced-key 模板和 SSH 安全诊断均已实现；真实系统 OpenSSH forced-command
+> 会话与拒绝矩阵已在 Linux loopback 测试架构中验证，Windows/macOS SSH 服务端配置
+> 仍明确标记为未验证，中继发送仍属于阶段 16。
 
 实施顺序与各阶段验收门槛见 [`stages.md`](stages.md)。
 
@@ -434,7 +437,7 @@ SQLite 队列、投递记录和系统通知历史始终保留。Windows 上应�
 
 ```text
 codex-notifier receive
-codex-notifier doctor ssh [--known-hosts <绝对路径>] [--authorized-keys <绝对路径>]
+codex-notifier doctor ssh [--ssh-config <绝对路径>] [--known-hosts <绝对路径>] [--authorized-keys <绝对路径>]
 ```
 
 `receive` 不是通用本地输入命令。它要求 OpenSSH 提供的

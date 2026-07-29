@@ -228,7 +228,11 @@ impl DiagnosticStatus {
 /// The alias and path are passed as distinct process arguments. Command output
 /// is discarded because it may contain hostnames or public-key material.
 #[must_use]
-pub fn diagnose_host_key(alias: Option<&str>, known_hosts: &Path) -> DiagnosticStatus {
+pub fn diagnose_host_key(
+    alias: Option<&str>,
+    known_hosts: &Path,
+    ssh_config: Option<&Path>,
+) -> DiagnosticStatus {
     let Some(alias) = alias else {
         return DiagnosticStatus::NotConfigured;
     };
@@ -238,7 +242,7 @@ pub fn diagnose_host_key(alias: Option<&str>, known_hosts: &Path) -> DiagnosticS
     if !known_hosts.is_file() {
         return DiagnosticStatus::Missing;
     }
-    let Some(configuration) = resolved_ssh_configuration(alias) else {
+    let Some(configuration) = resolved_ssh_configuration(alias, ssh_config) else {
         return DiagnosticStatus::Unavailable;
     };
     if !configuration.strict {
@@ -267,8 +271,15 @@ struct ResolvedSshConfiguration {
     strict: bool,
 }
 
-fn resolved_ssh_configuration(alias: &str) -> Option<ResolvedSshConfiguration> {
-    let mut child = Command::new("ssh")
+fn resolved_ssh_configuration(
+    alias: &str,
+    ssh_config: Option<&Path>,
+) -> Option<ResolvedSshConfiguration> {
+    let mut command = Command::new("ssh");
+    if let Some(ssh_config) = ssh_config {
+        command.args(["-F"]).arg(ssh_config);
+    }
+    let mut child = command
         .args(["-G", "--", alias])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -307,7 +318,7 @@ fn parse_ssh_configuration(output: &[u8]) -> Option<ResolvedSshConfiguration> {
             "hostname" => hostname = Some(value),
             "hostkeyalias" if value != "none" => host_key_alias = Some(value),
             "port" => port = value.parse::<u16>().ok(),
-            "stricthostkeychecking" => strict = Some(value == "yes"),
+            "stricthostkeychecking" => strict = Some(matches!(value, "yes" | "true")),
             _ => {}
         }
     }
@@ -564,10 +575,44 @@ mod tests {
         fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
             .expect("directory mode");
         let path = directory.path().join("authorized_keys");
-        fs::write(&path, "ssh-ed25519 placeholder").expect("authorized keys");
+        std::fs::write(&path, "ssh-ed25519 placeholder").expect("authorized keys");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("file mode");
         assert_eq!(diagnose_authorized_keys(&path), DiagnosticStatus::Ready);
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("file mode");
         assert_eq!(diagnose_authorized_keys(&path), DiagnosticStatus::Insecure);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_authorized_file_permissions_reject_untrusted_writers() {
+        const SECURE_ACL: &str = r"$ErrorActionPreference='Stop';$p=$env:CODEX_NOTIFIER_TEST_FILE;$me=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;& icacls.exe $p /inheritance:r /grant:r ('*'+$me+':(F)') '*S-1-5-18:(F)' '*S-1-5-32-544:(F)' | Out-Null;if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}";
+        const UNSAFE_ACL: &str = r"$ErrorActionPreference='Stop';$p=$env:CODEX_NOTIFIER_TEST_FILE;& icacls.exe $p /grant '*S-1-1-0:(M)' | Out-Null;if($LASTEXITCODE -ne 0){exit $LASTEXITCODE}";
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("authorized_keys");
+        std::fs::write(&path, "ssh-ed25519 placeholder").expect("authorized keys");
+        for (script, expected) in [
+            (SECURE_ACL, DiagnosticStatus::Ready),
+            (UNSAFE_ACL, DiagnosticStatus::Insecure),
+        ] {
+            let output = Command::new("powershell.exe")
+                .args([
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    script,
+                ])
+                .env("CODEX_NOTIFIER_TEST_FILE", &path)
+                .stdin(Stdio::null())
+                .output()
+                .expect("PowerShell ACL setup");
+            assert!(
+                output.status.success(),
+                "PowerShell ACL setup failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(diagnose_authorized_keys(&path), expected);
+        }
     }
 }

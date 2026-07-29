@@ -24,6 +24,7 @@ struct IsolatedEnvironment {
     home: PathBuf,
     config_base: PathBuf,
     state_base: PathBuf,
+    config_file: PathBuf,
     state_dir: PathBuf,
 }
 
@@ -73,6 +74,7 @@ impl IsolatedEnvironment {
             home,
             config_base,
             state_base,
+            config_file: paths.config_file().to_owned(),
             state_dir: paths.state_dir().to_owned(),
         }
     }
@@ -282,4 +284,53 @@ fn doctor_ssh_reports_only_bounded_statuses() {
     let output = String::from_utf8(output.stdout).expect("UTF-8 diagnostic");
     assert_eq!(output, "host_key=not_configured\nauthorized_keys=missing\n");
     assert!(!output.contains(environment.home.to_string_lossy().as_ref()));
+}
+
+#[test]
+fn doctor_ssh_resolves_pinned_aliases_and_rejects_weak_host_key_policy() {
+    let environment = IsolatedEnvironment::new();
+    fs::write(
+        &environment.config_file,
+        b"config_version = 1\n[relay]\nssh_host_alias = \"desktop-test\"\n",
+    )
+    .expect("relay configuration");
+    let ssh_directory = environment.home.join(".ssh");
+    fs::create_dir_all(&ssh_directory).expect("SSH directory");
+    let ssh_config = ssh_directory.join("config");
+    let known_hosts = ssh_directory.join("known_hosts");
+    fs::write(
+        &ssh_config,
+        b"Host desktop-test\n    HostName desktop.example\n    Port 22\n    StrictHostKeyChecking yes\n",
+    )
+    .expect("SSH configuration");
+    fs::write(&known_hosts, b"desktop.example ssh-ed25519 AAAA\n").expect("known hosts");
+
+    let ready = environment
+        .command()
+        .args(["doctor", "ssh", "--ssh-config"])
+        .arg(&ssh_config)
+        .output()
+        .expect("ready doctor SSH");
+    assert!(ready.status.success());
+    assert_eq!(
+        String::from_utf8(ready.stdout).expect("ready UTF-8"),
+        "host_key=ready\nauthorized_keys=missing\n"
+    );
+
+    fs::write(
+        &ssh_config,
+        b"Host desktop-test\n    HostName desktop.example\n    Port 22\n    StrictHostKeyChecking accept-new\n",
+    )
+    .expect("weak SSH configuration");
+    let insecure = environment
+        .command()
+        .args(["doctor", "ssh", "--ssh-config"])
+        .arg(&ssh_config)
+        .output()
+        .expect("insecure doctor SSH");
+    assert!(insecure.status.success());
+    assert_eq!(
+        String::from_utf8(insecure.stdout).expect("insecure UTF-8"),
+        "host_key=insecure\nauthorized_keys=missing\n"
+    );
 }

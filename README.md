@@ -6,7 +6,7 @@
 It turns Codex events that need human attention into native Windows or macOS
 notifications, including events produced by Codex running on a remote server.
 
-> Status: Stages 01-14 are complete: compatibility evidence, architecture
+> Status: Stages 01-15 are complete: compatibility evidence, architecture
 > decisions, the Rust workspace, three-platform quality gates, and the
 > canonical event domain model, layered configuration, and cross-platform path
 > rules are established, together with structured redacted logging and the
@@ -26,7 +26,11 @@ notifications, including events produced by Codex running on a remote server.
 > verified task-completion hook and per-user startup resources, runs the agent,
 > reports status, submits both explicit test event kinds, upgrades idempotently,
 > and uninstalls owned resources while preserving event state and user edits.
-> SSH has not been implemented yet.
+> The restricted SSH `receive` boundary, redacted acknowledgements, dedicated
+> forced-key templates, and SSH security diagnostics are implemented. A real
+> system OpenSSH forced-command session and rejection matrix are verified on a
+> Linux loopback harness; Windows/macOS SSH-server setup remains explicitly
+> unverified and relay sending remains Stage 16 work.
 
 The implementation sequence and acceptance gates are defined in
 [`stages.md`](stages.md).
@@ -510,7 +514,7 @@ Stage 15 adds the desktop-side trust boundary:
 
 ```text
 codex-notifier receive
-codex-notifier doctor ssh [--known-hosts <absolute-path>] [--authorized-keys <absolute-path>]
+codex-notifier doctor ssh [--ssh-config <absolute-path>] [--known-hosts <absolute-path>] [--authorized-keys <absolute-path>]
 ```
 
 `receive` is not a general local ingestion command. It requires OpenSSH's

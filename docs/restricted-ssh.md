@@ -77,13 +77,14 @@ Run the read-only diagnostic on the relay and desktop as applicable:
 
 ```text
 codex-notifier doctor ssh
+codex-notifier doctor ssh --ssh-config ABSOLUTE_PATH
 codex-notifier doctor ssh --known-hosts ABSOLUTE_PATH
 codex-notifier doctor ssh --authorized-keys ABSOLUTE_PATH
 ```
 
-The optional paths support a custom `UserKnownHostsFile` and the Windows
-administrator key file. The command never prints a host alias, path, key,
-username, or file content.
+The optional paths support a custom OpenSSH client configuration,
+`UserKnownHostsFile`, and the Windows administrator key file. The command
+never prints a host alias, path, key, username, or file content.
 
 `host_key=ready` means the system `ssh -G` result uses
 `StrictHostKeyChecking yes` and `ssh-keygen -F` finds the resolved host/port or
