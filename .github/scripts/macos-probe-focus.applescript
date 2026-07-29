@@ -34,7 +34,11 @@ on findFocusControl(controlCenterWindow)
             set expectedY to windowTop + ((windowHeight * 11) div 100)
         end if
 
-        set bestDetails to missing value
+        set bestValue to missing value
+        set bestPositionX to 0
+        set bestPositionY to 0
+        set bestWidth to 0
+        set bestHeight to 0
         set bestDistance to 100000000
         set candidateElements to entire contents of controlCenterWindow
         repeat with candidateElement in candidateElements
@@ -49,15 +53,19 @@ on findFocusControl(controlCenterWindow)
                     set candidateDistance to (deltaX * deltaX) + (deltaY * deltaY)
                     if candidateDistance < bestDistance then
                         set bestDistance to candidateDistance
-                        set bestDetails to {value of candidateElement as text, elementPosition, elementSize, centerX, centerY}
+                        set bestValue to value of candidateElement as text
+                        set bestPositionX to item 1 of elementPosition
+                        set bestPositionY to item 2 of elementPosition
+                        set bestWidth to item 1 of elementSize
+                        set bestHeight to item 2 of elementSize
                     end if
                 end if
             end try
         end repeat
-        if bestDetails is missing value then
+        if bestValue is missing value then
             error "Focus control not found near the expected Control Center position"
         end if
-        return bestDetails
+        return {bestValue, expectedX, expectedY, bestPositionX, bestPositionY, bestWidth, bestHeight, bestDistance}
     end tell
 end findFocusControl
 
@@ -92,10 +100,12 @@ on run arguments
 
         set beforeDetails to my findFocusControl(window 1 of controlCenterProcess)
         set valueBefore to item 1 of beforeDetails
-        set focusPosition to item 2 of beforeDetails
-        set focusSize to item 3 of beforeDetails
-        set clickX to item 4 of beforeDetails
-        set clickY to item 5 of beforeDetails
+        set clickX to item 2 of beforeDetails
+        set clickY to item 3 of beforeDetails
+        set focusPositionX to item 4 of beforeDetails
+        set focusPositionY to item 5 of beforeDetails
+        set focusWidth to item 6 of beforeDetails
+        set focusHeight to item 7 of beforeDetails
         if valueBefore is not targetValue then
             do shell script quoted form of clickHelper & " click " & clickX & " " & clickY
             delay 2
@@ -107,12 +117,12 @@ on run arguments
         set afterDetails to my findFocusControl(window 1 of controlCenterProcess)
         set valueAfter to item 1 of afterDetails
         if valueAfter is not targetValue then
-            error "Focus control did not reach requested value " & targetValue & "; before=" & valueBefore & ", after=" & valueAfter
+            error "Focus control did not reach requested value " & targetValue & "; before=" & valueBefore & ", after=" & valueAfter & ", click=" & clickX & "," & clickY & ", nearest=" & focusPositionX & "," & focusPositionY & "," & focusWidth & "," & focusHeight
         end if
 
         if (count windows of controlCenterProcess) > 0 then
             perform action "AXPress" of controlCenterItem
         end if
-        return "focus target=" & targetValue & " before=" & valueBefore & " after=" & valueAfter & " position=" & focusPosition & " size=" & focusSize
+        return "focus target=" & targetValue & " before=" & valueBefore & " after=" & valueAfter & " click=" & clickX & "," & clickY & " nearest=" & focusPositionX & "," & focusPositionY & "," & focusWidth & "," & focusHeight
     end tell
 end run
