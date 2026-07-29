@@ -247,6 +247,16 @@ async fn wait_for_state(runtime: &AgentRuntime, expected: AgentState) {
     .expect("state transition");
 }
 
+async fn wait_until_not_accepting(runtime: &AgentRuntime) {
+    tokio::time::timeout(StdDuration::from_secs(2), async {
+        while matches!(runtime.state(), AgentState::Starting | AgentState::Ready) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("non-accepting state transition");
+}
+
 async fn wait_for_active(delivery: &FakeDelivery, expected: usize) {
     tokio::time::timeout(StdDuration::from_secs(2), async {
         while delivery.active() != expected {
@@ -390,7 +400,7 @@ async fn cooperative_shutdown_rejects_new_work_and_releases_inflight_lease() {
     runtime.submit(&event(1)).expect("submission");
     wait_for_active(&factory.delivery, 1).await;
     shutdown_tx.send(()).expect("shutdown");
-    wait_for_state(&runtime, AgentState::Draining).await;
+    wait_until_not_accepting(&runtime).await;
     assert_eq!(runtime.submit(&event(2)), Err(AgentError::Draining));
     let report = runner.await.expect("runner").expect("clean run");
     assert_eq!(report.released, 1);
