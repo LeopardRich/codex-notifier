@@ -243,7 +243,7 @@ fn assert_local_forward_rejected(mut command: Command, port: u16, user: &str) {
             Err(_) if Instant::now() < deadline => {
                 std::thread::sleep(StdDuration::from_millis(25));
             }
-            Err(_) => panic!("local forwarding listener did not start"),
+            Err(error) => panic!("local forwarding listener did not start: {error}"),
         }
     };
     forwarded_client
