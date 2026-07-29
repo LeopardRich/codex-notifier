@@ -147,7 +147,8 @@ mod macos {
 
         request_authorization_with_application_run_loop(AuthorizationExpectation::Denial);
         if let Some(path) = std::env::var_os(RESULT_PATH_ENV) {
-            fs::write(path, b"ok").expect("write successful macOS denial result");
+            fs::write(path, b"disabled_for_application")
+                .expect("write successful macOS denial result");
         }
     }
 
@@ -331,10 +332,20 @@ mod macos {
         let result = fs::read(&result_path).unwrap_or_default();
         let stdout = fs::read_to_string(&stdout_path).unwrap_or_default();
         let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+        let expected_result: &[u8] = if test_name == DENIAL_TEST_NAME {
+            b"disabled_for_application"
+        } else {
+            b"ok"
+        };
         assert!(
-            status.success() && result == b"ok",
+            status.success() && result == expected_result,
             "LaunchServices smoke failed: status={status}, result={result:?}, stdout={stdout:?}, stderr={stderr:?}"
         );
+        if test_name == DENIAL_TEST_NAME {
+            eprintln!(
+                "LaunchServices denial smoke succeeded: result={result:?}, stderr={stderr:?}"
+            );
+        }
     }
 
     fn create_signed_product_bundle(

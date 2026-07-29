@@ -834,6 +834,72 @@ jobs:
           cat target/macos-smoke.log
           exit "$result"
 
+      - name: Record Focus controls without changing state
+        if: matrix.scenario == 'grant'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          osascript >target/macos-focus-controls.txt 2>&1 <<'APPLESCRIPT'
+          tell application "System Events"
+              set observations to ""
+              if not (exists application process "ControlCenter") then
+                  return "ControlCenter process not found"
+              end if
+              set controlCenterProcess to application process "ControlCenter"
+              set pressedControlCenter to false
+              repeat with candidateItem in menu bar items of menu bar 1 of controlCenterProcess
+                  try
+                      set itemName to name of candidateItem as text
+                  on error
+                      set itemName to ""
+                  end try
+                  try
+                      set itemDescription to description of candidateItem as text
+                  on error
+                      set itemDescription to ""
+                  end try
+                  set observations to observations & " menu-item name=" & itemName & " description=" & itemDescription
+                  if itemName contains "Control Center" or itemDescription contains "Control Center" then
+                      perform action "AXPress" of candidateItem
+                      set pressedControlCenter to true
+                      exit repeat
+                  end if
+              end repeat
+              delay 2
+              set observations to observations & " pressed=" & pressedControlCenter & " windows=" & (count windows of controlCenterProcess)
+              repeat with candidateWindow in windows of controlCenterProcess
+                  repeat with candidateElement in entire contents of candidateWindow
+                      try
+                          set elementRole to role of candidateElement as text
+                      on error
+                          set elementRole to ""
+                      end try
+                      try
+                          set elementName to name of candidateElement as text
+                      on error
+                          set elementName to ""
+                      end try
+                      try
+                          set elementDescription to description of candidateElement as text
+                      on error
+                          set elementDescription to ""
+                      end try
+                      try
+                          set elementValue to value of candidateElement as text
+                      on error
+                          set elementValue to ""
+                      end try
+                      set observations to observations & " element role=" & elementRole & " name=" & elementName & " description=" & elementDescription & " value=" & elementValue
+                  end repeat
+              end repeat
+              return observations
+          end tell
+          APPLESCRIPT
+          screencapture -x target/macos-focus-controls.png \
+            2>target/macos-focus-controls-screenshot-error.txt
+          cat target/macos-focus-controls.txt
+
       - name: Exercise explicit authorization denial
         if: matrix.scenario == 'denial'
         id: macos-denial
