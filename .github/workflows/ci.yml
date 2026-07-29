@@ -47,6 +47,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes openssh-server
           sudo install -d -m 0755 /run/sshd
+          account_hash="$(openssl rand -hex 32 | openssl passwd -6 -stdin)"
+          sudo usermod --password "$account_hash" "$USER"
+          unset account_hash
 
       - name: Verify restricted receive through real OpenSSH
         if: matrix.target == 'linux-relay'
