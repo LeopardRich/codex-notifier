@@ -1,0 +1,123 @@
+name: macOS authorization run-loop probe
+
+on:
+  push:
+    branches:
+      - platform-probe/macos-runloop
+
+permissions:
+  contents: read
+
+jobs:
+  authorization:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS 14 authorization
+            os: macos-14
+          - name: macOS latest authorization
+            os: macos-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
+
+      - name: Record host and Aqua session
+        shell: bash
+        run: |
+          mkdir -p target
+          {
+            sw_vers
+            uname -m
+            id
+            stat -f 'ConsoleUser=%Su ConsoleUid=%u' /dev/console
+            printf 'AquaLaunchDomain='
+            launchctl print "gui/$(id -u)" >/dev/null 2>&1
+            echo $?
+            pgrep -lf 'WindowServer|loginwindow|NotificationCenter|UserNotificationCenter'
+          } | tee target/macos-runloop-host.txt
+
+      - name: Build macOS smoke executable
+        run: cargo test -p codex-notifier-native-notification --test macos_smoke --no-run
+
+      - name: Exercise first authorization and delivery
+        id: interactive-smoke
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          CODEX_NOTIFIER_MACOS_SMOKE_ROOT=/Applications \
+            cargo test -p codex-notifier-native-notification \
+            --test macos_smoke \
+            displays_task_completion_and_approval_request_notifications \
+            -- --ignored --exact --nocapture \
+            >target/macos-runloop-smoke.log 2>&1 &
+          smoke_pid=$!
+
+          sleep 5
+          screencapture -x target/macos-runloop-before.png \
+            2>target/macos-runloop-before-error.txt
+          osascript >target/macos-runloop-ui.txt 2>&1 <<'APPLESCRIPT'
+          tell application "System Events"
+              set visibleProcesses to name of every process whose visible is true
+              repeat with processName in {"Codex Notifier", "UserNotificationCenter", "NotificationCenter", "CoreServicesUIAgent"}
+                  try
+                      tell process processName
+                          repeat with candidateWindow in windows
+                              repeat with candidateButton in buttons of candidateWindow
+                                  if name of candidateButton is "Allow" then
+                                      click candidateButton
+                                      return "visible=" & (visibleProcesses as text) & "; clicked=" & processName
+                                  end if
+                              end repeat
+                          end repeat
+                      end tell
+                  end try
+              end repeat
+              return "visible=" & (visibleProcesses as text) & "; Allow button not found"
+          end tell
+          APPLESCRIPT
+
+          sleep 1
+          screencapture -x target/macos-runloop-after.png \
+            2>target/macos-runloop-after-error.txt
+
+          result=''
+          for _ in $(seq 1 45); do
+            if ! kill -0 "$smoke_pid" 2>/dev/null; then
+              wait "$smoke_pid"
+              result=$?
+              break
+            fi
+            sleep 1
+          done
+          if [[ -z "$result" ]]; then
+            echo 'Smoke test timed out' >>target/macos-runloop-smoke.log
+            kill "$smoke_pid" 2>/dev/null
+            pkill -f codex-notifier-macos-smoke 2>/dev/null
+            wait "$smoke_pid" 2>/dev/null
+            result=124
+          fi
+
+          log show --last 3m --style compact \
+            --predicate 'process == "codex-notifier-macos-smoke" OR subsystem CONTAINS "UserNotifications"' \
+            >target/macos-runloop-unified.log 2>&1 || true
+          cat target/macos-runloop-ui.txt
+          cat target/macos-runloop-smoke.log
+          exit "$result"
+
+      - name: Upload probe evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.os }}-runloop-probe
+          path: |
+            target/macos-runloop-*.txt
+            target/macos-runloop-*.log
+            target/macos-runloop-*.png
+          if-no-files-found: error

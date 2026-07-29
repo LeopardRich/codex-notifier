@@ -1,227 +1,294 @@
-//! Explicit interactive macOS `UserNotifications` smoke test.
+//! Explicit macOS `UserNotifications` smoke-test executable.
 
-#![cfg(target_os = "macos")]
+#[cfg(not(target_os = "macos"))]
+fn main() {}
 
-use std::collections::BTreeMap;
-use std::ffi::OsStr;
-use std::fs;
-use std::os::unix::fs::PermissionsExt;
-use std::process::Command;
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
-
-use codex_notifier_core::{
-    CanonicalEvent, EventId, EventKind, EventSource, Extensions, Presentation, Privacy, Urgency,
-};
-use codex_notifier_native_notification::{
-    CODEX_NOTIFIER_BUNDLE_ID, MacOsNotificationBackend, NativeNotificationAdapter,
-    NotificationBackend, NotificationContentPolicy, NotificationPolicy, NotificationStatus,
-};
-use tempfile::Builder;
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-
-const RESULT_PATH_ENV: &str = "CODEX_NOTIFIER_MACOS_SMOKE_RESULT";
-const SMOKE_ROOT_ENV: &str = "CODEX_NOTIFIER_MACOS_SMOKE_ROOT";
-const TEST_NAME: &str = "displays_task_completion_and_approval_request_notifications";
-const NO_GUI_TEST_NAME: &str = "reports_real_no_gui_session";
-const EXECUTABLE_NAME: &str = "codex-notifier-macos-smoke";
-
-fn event(kind: EventKind, id: &str, urgency: Urgency) -> CanonicalEvent {
-    let occurred_at =
-        OffsetDateTime::parse("2026-07-29T06:00:00.000Z", &Rfc3339).expect("valid smoke time");
-    CanonicalEvent::new(
-        EventId::parse(id).expect("UUIDv7 smoke ID"),
-        kind,
-        occurred_at,
-        EventSource::new("smoke-test", None, None).expect("safe source"),
-        Presentation::new("not displayed", "not displayed", urgency, Privacy::Private)
-            .expect("safe presentation"),
-        None,
-        Extensions::new(BTreeMap::new()).expect("empty extensions"),
-        occurred_at,
-    )
-    .expect("valid smoke event")
+#[cfg(target_os = "macos")]
+fn main() {
+    macos::run();
 }
 
-#[test]
-#[ignore = "requires an interactive Aqua session, prompts for authorization, and displays two notifications"]
-fn displays_task_completion_and_approval_request_notifications() {
-    if !running_from_application_bundle() {
-        relaunch_in_product_bundle(TEST_NAME, None);
-        return;
+#[cfg(target_os = "macos")]
+mod macos {
+
+    use std::collections::BTreeMap;
+    use std::ffi::OsStr;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+    use std::sync::{Arc, mpsc};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    use codex_notifier_core::{
+        CanonicalEvent, EventId, EventKind, EventSource, Extensions, Presentation, Privacy, Urgency,
+    };
+    use codex_notifier_native_notification::{
+        CODEX_NOTIFIER_BUNDLE_ID, MacOsNotificationBackend, NativeNotificationAdapter,
+        NotificationBackend, NotificationContentPolicy, NotificationPolicy, NotificationStatus,
+    };
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+    use objc2_foundation::{NSDate, NSRunLoop};
+    use tempfile::Builder;
+    use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+
+    const RESULT_PATH_ENV: &str = "CODEX_NOTIFIER_MACOS_SMOKE_RESULT";
+    const SMOKE_ROOT_ENV: &str = "CODEX_NOTIFIER_MACOS_SMOKE_ROOT";
+    const TEST_NAME: &str = "displays_task_completion_and_approval_request_notifications";
+    const NO_GUI_TEST_NAME: &str = "reports_real_no_gui_session";
+    const EXECUTABLE_NAME: &str = "codex-notifier-macos-smoke";
+    const AUTHORIZATION_TIMEOUT: Duration = Duration::from_secs(120);
+
+    pub(super) fn run() {
+        let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+        if arguments.iter().any(|argument| argument == "--list") {
+            println!("{TEST_NAME}: test");
+            println!("{NO_GUI_TEST_NAME}: test");
+            println!("reports_real_missing_application_identity: test");
+            return;
+        }
+        if arguments.iter().any(|argument| argument == TEST_NAME) {
+            displays_task_completion_and_approval_request_notifications();
+        } else if arguments
+            .iter()
+            .any(|argument| argument == NO_GUI_TEST_NAME)
+        {
+            reports_real_no_gui_session();
+        } else {
+            reports_real_missing_application_identity();
+        }
     }
 
-    let backend = Arc::new(MacOsNotificationBackend::codex_notifier());
-    backend
-        .request_authorization()
-        .expect("macOS notification authorization must be granted");
-    let diagnostic = backend.diagnose();
-    assert_eq!(
-        diagnostic.status(),
-        NotificationStatus::Ready,
-        "macOS notification diagnostic: {diagnostic:?}"
-    );
-
-    let adapter = NativeNotificationAdapter::new(
-        backend,
-        NotificationPolicy::new(NotificationContentPolicy::Private, false),
-    );
-    adapter
-        .deliver_now(&event(
-            EventKind::TaskCompleted,
-            "01983c8d-b800-7000-8000-000000000014",
-            Urgency::Normal,
-        ))
-        .expect("macOS accepted the task-completion notification");
-    thread::sleep(Duration::from_millis(750));
-    adapter
-        .deliver_now(&event(
-            EventKind::ApprovalRequested,
-            "01983c8d-b800-7000-8000-000000000015",
-            Urgency::High,
-        ))
-        .expect("macOS accepted the approval-request notification");
-    if let Some(path) = std::env::var_os(RESULT_PATH_ENV) {
-        fs::write(path, b"ok").expect("write successful macOS smoke result");
-    }
-}
-
-#[test]
-fn reports_real_missing_application_identity() {
-    let backend = MacOsNotificationBackend::codex_notifier();
-    let diagnostic = backend.diagnose();
-    assert_eq!(
-        diagnostic.status(),
-        NotificationStatus::ApplicationIdentityMissing,
-        "macOS notification diagnostic: {diagnostic:?}"
-    );
-}
-
-#[test]
-#[ignore = "requires a signed product bundle running without an Aqua launch domain"]
-fn reports_real_no_gui_session() {
-    if !running_from_application_bundle() {
-        relaunch_in_product_bundle(NO_GUI_TEST_NAME, Some("nobody"));
-        return;
+    fn event(kind: EventKind, id: &str, urgency: Urgency) -> CanonicalEvent {
+        let occurred_at =
+            OffsetDateTime::parse("2026-07-29T06:00:00.000Z", &Rfc3339).expect("valid smoke time");
+        CanonicalEvent::new(
+            EventId::parse(id).expect("UUIDv7 smoke ID"),
+            kind,
+            occurred_at,
+            EventSource::new("smoke-test", None, None).expect("safe source"),
+            Presentation::new("not displayed", "not displayed", urgency, Privacy::Private)
+                .expect("safe presentation"),
+            None,
+            Extensions::new(BTreeMap::new()).expect("empty extensions"),
+            occurred_at,
+        )
+        .expect("valid smoke event")
     }
 
-    let backend = MacOsNotificationBackend::codex_notifier();
-    let diagnostic = backend.diagnose();
-    assert_eq!(
-        diagnostic.status(),
-        NotificationStatus::NoInteractiveSession,
-        "macOS notification diagnostic: {diagnostic:?}"
-    );
-}
+    fn displays_task_completion_and_approval_request_notifications() {
+        if !running_from_application_bundle() {
+            relaunch_in_product_bundle(TEST_NAME, None);
+            return;
+        }
 
-fn running_from_application_bundle() -> bool {
-    std::env::current_exe()
-        .ok()
-        .and_then(|executable| {
-            executable
-                .parent()
-                .and_then(std::path::Path::parent)
-                .and_then(std::path::Path::parent)
-                .map(std::path::Path::to_path_buf)
-        })
-        .is_some_and(|bundle| bundle.extension() == Some(OsStr::new("app")))
-}
+        request_authorization_with_application_run_loop();
+        let backend = Arc::new(MacOsNotificationBackend::codex_notifier());
+        let diagnostic = backend.diagnose();
+        assert_eq!(
+            diagnostic.status(),
+            NotificationStatus::Ready,
+            "macOS notification diagnostic: {diagnostic:?}"
+        );
 
-fn relaunch_in_product_bundle(test_name: &str, run_as_user: Option<&str>) {
-    let smoke_root =
-        std::path::PathBuf::from(std::env::var_os(SMOKE_ROOT_ENV).unwrap_or_else(|| "/tmp".into()));
-    let directory = Builder::new()
-        .prefix("codex-notifier-smoke-")
-        .tempdir_in(&smoke_root)
-        .expect("temporary smoke bundle directory");
-    if run_as_user.is_some() {
-        let mut permissions = fs::metadata(directory.path())
-            .expect("read smoke directory metadata")
+        let adapter = NativeNotificationAdapter::new(
+            backend,
+            NotificationPolicy::new(NotificationContentPolicy::Private, false),
+        );
+        adapter
+            .deliver_now(&event(
+                EventKind::TaskCompleted,
+                "01983c8d-b800-7000-8000-000000000014",
+                Urgency::Normal,
+            ))
+            .expect("macOS accepted the task-completion notification");
+        thread::sleep(Duration::from_millis(750));
+        adapter
+            .deliver_now(&event(
+                EventKind::ApprovalRequested,
+                "01983c8d-b800-7000-8000-000000000015",
+                Urgency::High,
+            ))
+            .expect("macOS accepted the approval-request notification");
+        if let Some(path) = std::env::var_os(RESULT_PATH_ENV) {
+            fs::write(path, b"ok").expect("write successful macOS smoke result");
+        }
+    }
+
+    fn reports_real_missing_application_identity() {
+        let backend = MacOsNotificationBackend::codex_notifier();
+        let diagnostic = backend.diagnose();
+        assert_eq!(
+            diagnostic.status(),
+            NotificationStatus::ApplicationIdentityMissing,
+            "macOS notification diagnostic: {diagnostic:?}"
+        );
+    }
+
+    fn reports_real_no_gui_session() {
+        if !running_from_application_bundle() {
+            relaunch_in_product_bundle(NO_GUI_TEST_NAME, Some("nobody"));
+            return;
+        }
+
+        let backend = MacOsNotificationBackend::codex_notifier();
+        let diagnostic = backend.diagnose();
+        assert_eq!(
+            diagnostic.status(),
+            NotificationStatus::NoInteractiveSession,
+            "macOS notification diagnostic: {diagnostic:?}"
+        );
+    }
+
+    fn request_authorization_with_application_run_loop() {
+        let main_thread = MainThreadMarker::new().expect("smoke app must start on the main thread");
+        let application = NSApplication::sharedApplication(main_thread);
+        assert!(
+            application.setActivationPolicy(NSApplicationActivationPolicy::Accessory),
+            "set accessory application activation policy"
+        );
+        application.finishLaunching();
+        application.activate();
+
+        let (sender, receiver) = mpsc::sync_channel(1);
+        thread::spawn(move || {
+            let result = MacOsNotificationBackend::codex_notifier().request_authorization();
+            sender
+                .send(result)
+                .expect("authorization result receiver must remain connected");
+        });
+
+        let run_loop = NSRunLoop::currentRunLoop();
+        let deadline = Instant::now() + AUTHORIZATION_TIMEOUT;
+        loop {
+            match receiver.try_recv() {
+                Ok(result) => {
+                    result.expect("macOS notification authorization must be granted");
+                    break;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    panic!("authorization worker disconnected without a result");
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "macOS notification authorization timed out"
+            );
+            let next_poll = NSDate::dateWithTimeIntervalSinceNow(0.05);
+            run_loop.runUntilDate(&next_poll);
+        }
+    }
+
+    fn running_from_application_bundle() -> bool {
+        std::env::current_exe()
+            .ok()
+            .and_then(|executable| {
+                executable
+                    .parent()
+                    .and_then(std::path::Path::parent)
+                    .and_then(std::path::Path::parent)
+                    .map(std::path::Path::to_path_buf)
+            })
+            .is_some_and(|bundle| bundle.extension() == Some(OsStr::new("app")))
+    }
+
+    fn relaunch_in_product_bundle(test_name: &str, run_as_user: Option<&str>) {
+        let smoke_root = std::path::PathBuf::from(
+            std::env::var_os(SMOKE_ROOT_ENV).unwrap_or_else(|| "/tmp".into()),
+        );
+        let directory = Builder::new()
+            .prefix("codex-notifier-smoke-")
+            .tempdir_in(&smoke_root)
+            .expect("temporary smoke bundle directory");
+        if run_as_user.is_some() {
+            let mut permissions = fs::metadata(directory.path())
+                .expect("read smoke directory metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(directory.path(), permissions)
+                .expect("make smoke directory traversable");
+        }
+        let bundle = directory.path().join("Codex Notifier.app");
+        let contents = bundle.join("Contents");
+        let macos = contents.join("MacOS");
+        fs::create_dir_all(&macos).expect("create smoke app bundle");
+        fs::write(contents.join("Info.plist"), info_plist()).expect("write smoke Info.plist");
+
+        let current = std::env::current_exe().expect("locate smoke test executable");
+        let bundled = macos.join(EXECUTABLE_NAME);
+        fs::copy(current, &bundled).expect("copy smoke executable into app bundle");
+        let mut permissions = fs::metadata(&bundled)
+            .expect("read smoke executable metadata")
             .permissions();
         permissions.set_mode(0o755);
-        fs::set_permissions(directory.path(), permissions)
-            .expect("make smoke directory traversable");
-    }
-    let bundle = directory.path().join("Codex Notifier.app");
-    let contents = bundle.join("Contents");
-    let macos = contents.join("MacOS");
-    fs::create_dir_all(&macos).expect("create smoke app bundle");
-    fs::write(contents.join("Info.plist"), info_plist()).expect("write smoke Info.plist");
+        fs::set_permissions(&bundled, permissions).expect("make smoke executable runnable");
 
-    let current = std::env::current_exe().expect("locate smoke test executable");
-    let bundled = macos.join(EXECUTABLE_NAME);
-    fs::copy(current, &bundled).expect("copy smoke executable into app bundle");
-    let mut permissions = fs::metadata(&bundled)
-        .expect("read smoke executable metadata")
-        .permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&bundled, permissions).expect("make smoke executable runnable");
-
-    let signed = Command::new("/usr/bin/codesign")
-        .args([
-            "--force",
-            "--sign",
-            "-",
-            "--identifier",
-            CODEX_NOTIFIER_BUNDLE_ID,
-        ])
-        .arg(&bundle)
-        .status()
-        .expect("run ad-hoc codesign for smoke bundle");
-    assert!(signed.success(), "ad-hoc codesign failed: {signed}");
-    let registered = Command::new(
+        let signed = Command::new("/usr/bin/codesign")
+            .args([
+                "--force",
+                "--sign",
+                "-",
+                "--identifier",
+                CODEX_NOTIFIER_BUNDLE_ID,
+            ])
+            .arg(&bundle)
+            .status()
+            .expect("run ad-hoc codesign for smoke bundle");
+        assert!(signed.success(), "ad-hoc codesign failed: {signed}");
+        let registered = Command::new(
         "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
     )
     .arg("-f")
     .arg(&bundle)
     .status()
     .expect("register smoke bundle with LaunchServices");
-    assert!(
-        registered.success(),
-        "LaunchServices registration failed: {registered}"
-    );
+        assert!(
+            registered.success(),
+            "LaunchServices registration failed: {registered}"
+        );
 
-    if let Some(user) = run_as_user {
-        let mut command = Command::new("/usr/bin/sudo");
-        command.args(["-u", user, "env", "HOME=/tmp", "TMPDIR=/tmp"]);
-        command.arg(&bundled);
+        if let Some(user) = run_as_user {
+            let mut command = Command::new("/usr/bin/sudo");
+            command.args(["-u", user, "env", "HOME=/tmp", "TMPDIR=/tmp"]);
+            command.arg(&bundled);
+            let status = command
+                .args(["--exact", test_name, "--ignored", "--nocapture"])
+                .status()
+                .expect("launch bundled smoke test without Aqua");
+            assert!(status.success(), "bundled smoke test failed: {status}");
+            return;
+        }
+
+        let result_path = directory.path().join("smoke-result");
+        let stdout_path = directory.path().join("smoke-stdout.log");
+        let stderr_path = directory.path().join("smoke-stderr.log");
+        let mut command = Command::new("/usr/bin/open");
+        command
+            .args(["-W", "-n", "--stdout"])
+            .arg(&stdout_path)
+            .arg("--stderr")
+            .arg(&stderr_path)
+            .arg("--env")
+            .arg(format!("{RESULT_PATH_ENV}={}", result_path.display()))
+            .arg(&bundle)
+            .args(["--args", "--exact", test_name, "--ignored", "--nocapture"]);
         let status = command
-            .args(["--exact", test_name, "--ignored", "--nocapture"])
             .status()
-            .expect("launch bundled smoke test without Aqua");
-        assert!(status.success(), "bundled smoke test failed: {status}");
-        return;
+            .expect("launch bundled smoke test through LaunchServices");
+        let result = fs::read(&result_path).unwrap_or_default();
+        let stdout = fs::read_to_string(&stdout_path).unwrap_or_default();
+        let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+        assert!(
+            status.success() && result == b"ok",
+            "LaunchServices smoke failed: status={status}, result={result:?}, stdout={stdout:?}, stderr={stderr:?}"
+        );
     }
 
-    let result_path = directory.path().join("smoke-result");
-    let stdout_path = directory.path().join("smoke-stdout.log");
-    let stderr_path = directory.path().join("smoke-stderr.log");
-    let mut command = Command::new("/usr/bin/open");
-    command
-        .args(["-W", "-n", "--stdout"])
-        .arg(&stdout_path)
-        .arg("--stderr")
-        .arg(&stderr_path)
-        .arg("--env")
-        .arg(format!("{RESULT_PATH_ENV}={}", result_path.display()))
-        .arg(&bundle)
-        .args(["--args", "--exact", test_name, "--ignored", "--nocapture"]);
-    let status = command
-        .status()
-        .expect("launch bundled smoke test through LaunchServices");
-    let result = fs::read(&result_path).unwrap_or_default();
-    let stdout = fs::read_to_string(&stdout_path).unwrap_or_default();
-    let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
-    assert!(
-        status.success() && result == b"ok",
-        "LaunchServices smoke failed: status={status}, result={result:?}, stdout={stdout:?}, stderr={stderr:?}"
-    );
-}
-
-fn info_plist() -> String {
-    format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
+    fn info_plist() -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -246,5 +313,6 @@ fn info_plist() -> String {
 </dict>
 </plist>
 "#
-    )
+        )
+    }
 }
