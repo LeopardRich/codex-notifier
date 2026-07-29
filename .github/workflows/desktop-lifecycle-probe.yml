@@ -38,10 +38,38 @@ jobs:
           $manifest = Join-Path $state 'install-manifest.json'
           $shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'Codex Notifier.lnk'
           $identity = 'HKCU:\Software\Classes\AppUserModelId\LeopardRich.CodexNotifier'
+          function Invoke-Notifier {
+            param(
+              [string]$Executable,
+              [string[]]$Arguments,
+              [string]$Output,
+              [int]$TimeoutSeconds = 30
+            )
+            $errorOutput = "$Output.stderr"
+            $process = Start-Process -FilePath $Executable -ArgumentList $Arguments -PassThru `
+              -RedirectStandardOutput $Output -RedirectStandardError $errorOutput
+            if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+              @(
+                "manifest=$([bool](Test-Path -LiteralPath $manifest))"
+                "installed_executable=$([bool](Test-Path -LiteralPath $installed))"
+                "shortcut=$([bool](Test-Path -LiteralPath $shortcut))"
+                "identity=$([bool](Test-Path -LiteralPath $identity))"
+                "agent_status=$([bool](Test-Path -LiteralPath (Join-Path $state 'agent-status.json')))"
+              ) | Set-Content target\lifecycle-evidence\windows-timeout-state.txt
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+              throw "notifier command timed out: $($Arguments[0])"
+            }
+            $process.WaitForExit()
+            if (Test-Path -LiteralPath $errorOutput) {
+              Get-Content -LiteralPath $errorOutput | Add-Content -LiteralPath $Output
+            }
+            if ($process.ExitCode -ne 0) {
+              throw "notifier command failed: $($Arguments[0])"
+            }
+          }
           try {
-            & $source install --codex-version 0.144.5 2>&1 |
-              Set-Content target\lifecycle-evidence\windows-install.txt
-            if ($LASTEXITCODE -ne 0) { throw 'initial install failed' }
+            Invoke-Notifier $source @('install', '--codex-version', '0.144.5') `
+              'target\lifecycle-evidence\windows-install.txt'
             & $source status |
               Set-Content target\lifecycle-evidence\windows-status-installed.txt
             if (-not (Select-String -Quiet -Path target\lifecycle-evidence\windows-status-installed.txt -Pattern '^agent_running=true$')) {
@@ -81,9 +109,8 @@ jobs:
             cargo build -p codex-notifier
             if ($LASTEXITCODE -ne 0) { throw 'upgrade build failed' }
             $upgrade = (Resolve-Path target\upgrade\debug\codex-notifier.exe).Path
-            & $upgrade install --codex-version 0.144.5 2>&1 |
-              Set-Content target\lifecycle-evidence\windows-upgrade.txt
-            if ($LASTEXITCODE -ne 0) { throw 'upgrade install failed' }
+            Invoke-Notifier $upgrade @('install', '--codex-version', '0.144.5') `
+              'target\lifecycle-evidence\windows-upgrade.txt'
             $secondHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installed).Hash
             if ($firstHash -eq $secondHash) { throw 'installed executable was not replaced' }
 
@@ -113,9 +140,8 @@ jobs:
               throw 'queue/receipt state did not survive upgrade and restart'
             }
 
-            & $upgrade uninstall 2>&1 |
-              Set-Content target\lifecycle-evidence\windows-uninstall.txt
-            if ($LASTEXITCODE -ne 0) { throw 'uninstall failed' }
+            Invoke-Notifier $upgrade @('uninstall') `
+              'target\lifecycle-evidence\windows-uninstall.txt'
             if ((Test-Path -LiteralPath $installed) -or (Test-Path -LiteralPath $shortcut) -or
                 (Test-Path -LiteralPath $identity) -or (Test-Path -LiteralPath $manifest) -or
                 (Test-Path -LiteralPath $config)) {
@@ -145,7 +171,10 @@ jobs:
           }
           finally {
             if (Test-Path -LiteralPath $manifest) {
-              & $source uninstall *> $null
+              try {
+                Invoke-Notifier $source @('uninstall') `
+                  'target\lifecycle-evidence\windows-cleanup.txt'
+              } catch {}
             }
           }
 
@@ -235,7 +264,7 @@ jobs:
           openssl req -new -newkey rsa:2048 -nodes -sha256 -config "$directory/leaf.cnf" -keyout "$directory/leaf.key" -out "$directory/leaf.csr"
           openssl x509 -req -sha256 -days 1 -in "$directory/leaf.csr" -CA "$directory/root.pem" -CAkey "$directory/root.key" -CAcreateserial -extfile "$directory/leaf.cnf" -extensions extensions -out "$directory/leaf.pem"
           pkcs12_options=()
-          if [[ "$(openssl version)" == "OpenSSL 3."* ]]; then
+          if (( $(sw_vers -productVersion | cut -d. -f1) > 14 )); then
             pkcs12_options=(-legacy)
           fi
           openssl pkcs12 -export "${pkcs12_options[@]}" -inkey "$directory/leaf.key" -in "$directory/leaf.pem" -certfile "$directory/root.pem" -out "$directory/leaf.p12" -passout "pass:$password"
@@ -311,7 +340,20 @@ jobs:
             sleep 0.1
           done
           open 'x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=io.github.leopardrich.codex-notifier' || true
-          banner_pressed=1
+          run_ui() {
+            osascript .github/scripts/macos-lifecycle-ui.applescript >target/lifecycle-evidence/macos-ui-current.txt 2>&1 &
+            ui_pid=$!
+            for poll in $(seq 1 30); do
+              if ! kill -0 "$ui_pid" 2>/dev/null; then
+                wait "$ui_pid" || true
+                return
+              fi
+              sleep 0.1
+            done
+            kill "$ui_pid" 2>/dev/null || true
+            wait "$ui_pid" 2>/dev/null || true
+            echo ui-timeout >target/lifecycle-evidence/macos-ui-current.txt
+          }
           for attempt in $(seq 1 100); do
             if "$source_executable" status 2>/dev/null | grep -q '^notification=ready$'; then break; fi
             CODEX_LIFECYCLE_CLICK_HELPER="$PWD/target/macos-lifecycle-click" \
@@ -321,7 +363,7 @@ jobs:
             CODEX_LIFECYCLE_SETTINGS_ALLOW_PRESSED="$settings_allow_pressed" \
             CODEX_LIFECYCLE_SCREEN_PRESSED="$screen_pressed" \
             CODEX_LIFECYCLE_OBSERVE_TEXT='' \
-              osascript .github/scripts/macos-lifecycle-ui.applescript >target/lifecycle-evidence/macos-ui-current.txt 2>&1 || true
+              run_ui
             cat target/lifecycle-evidence/macos-ui-current.txt >>target/lifecycle-evidence/macos-ui-history.txt
             if grep -q '^pressed=screen' target/lifecycle-evidence/macos-ui-current.txt; then screen_pressed=1; fi
             if grep -q '^pressed=notification-allow' target/lifecycle-evidence/macos-ui-current.txt; then settings_allow_pressed=1; fi
