@@ -30,7 +30,7 @@ mod macos {
     };
     use objc2::{MainThreadMarker, runtime::Bool};
     use objc2_app_kit::{NSApplication, NSEventMask};
-    use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSError};
+    use objc2_foundation::{NSDate, NSError, NSString};
     use objc2_user_notifications::{UNAuthorizationOptions, UNUserNotificationCenter};
     use tempfile::Builder;
     use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -162,6 +162,7 @@ mod macos {
         );
 
         let deadline = Instant::now() + AUTHORIZATION_TIMEOUT;
+        let default_run_loop_mode = NSString::from_str("kCFRunLoopDefaultMode");
         loop {
             match receiver.try_recv() {
                 Ok((granted, error_free)) => {
@@ -185,7 +186,7 @@ mod macos {
             if let Some(event) = application.nextEventMatchingMask_untilDate_inMode_dequeue(
                 NSEventMask::Any,
                 Some(&next_poll),
-                NSDefaultRunLoopMode,
+                &default_run_loop_mode,
                 true,
             ) {
                 application.sendEvent(&event);
