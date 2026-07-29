@@ -36,6 +36,7 @@ const DEFAULT_WORKERS: usize = 4;
 const DATABASE_FILE: &str = "events.sqlite3";
 const DEFAULT_RETRY_INITIAL_DELAY_MS: u64 = 1_000;
 const DEFAULT_RETRY_MAX_DELAY_MS: u64 = 60_000;
+const RELAY_LEASE_ALLOWANCE_MS: u64 = 10_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RetrySchedule {
@@ -317,7 +318,9 @@ impl AgentHost {
             StorePolicy::default().with_queue_limit(config.storage().max_queue_entries())?;
         let retry_schedule = if role == RuntimeRole::Relay {
             store_policy = store_policy
-                .with_lease_duration_ms(config.relay().connect_timeout_ms().saturating_add(10_000))?
+                .with_lease_duration_ms(relay_lease_duration_ms(
+                    config.relay().connect_timeout_ms(),
+                ))?
                 .with_max_attempts(config.relay().retry_max_attempts())?;
             RetrySchedule::new(
                 config.relay().retry_initial_delay_ms(),
@@ -618,6 +621,10 @@ fn now_ms() -> i64 {
     })
 }
 
+const fn relay_lease_duration_ms(connect_timeout_ms: u64) -> u64 {
+    connect_timeout_ms.saturating_add(RELAY_LEASE_ALLOWANCE_MS)
+}
+
 /// Returns the database path owned by the agent for diagnostics and tests.
 #[must_use]
 pub fn database_path(state_dir: &Path) -> std::path::PathBuf {
@@ -640,5 +647,12 @@ mod tests {
         }
         assert_eq!(RetrySchedule::new(0, 100), Err(AgentError::InvalidPolicy));
         assert_eq!(RetrySchedule::new(101, 100), Err(AgentError::InvalidPolicy));
+    }
+
+    #[test]
+    fn relay_lease_outlives_the_maximum_ssh_operation() {
+        assert_eq!(relay_lease_duration_ms(100), 10_100);
+        assert_eq!(relay_lease_duration_ms(120_000), 130_000);
+        assert!(relay_lease_duration_ms(120_000) > 125_000);
     }
 }

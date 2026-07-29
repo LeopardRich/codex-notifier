@@ -81,9 +81,9 @@ offline recovery, and at-least-once desktop deduplication.
   configured two-attempt limit and records exactly one dead letter, one live
   scheduled retry, and no delivery. A third stops the first agent after a
   future retry is committed, reopens the same SQLite state, and delivers it
-  from a new agent without another submission. A fourth inspects a live lease
-  and proves the maximum 125-second SSH process lifetime is covered by a
-  130-second durable lease.
+  from a new agent without another submission. A separate unit test freezes the
+  lease formula and proves the maximum 125-second SSH process lifetime is
+  covered by a 130-second durable lease.
 - Branch CI run
   [`30489355890`](https://github.com/LeopardRich/codex-notifier/actions/runs/30489355890)
   passed formatting, strict Clippy, normal tests, the Windows Session 0 check,

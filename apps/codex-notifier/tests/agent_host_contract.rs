@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
 
 use codex_notifier::{
-    AgentHost, ApprovalRequestedEmitter, EmitError, HostError, TaskCompletedEmitter, database_path,
+    AgentHost, ApprovalRequestedEmitter, EmitError, HostError, TaskCompletedEmitter,
 };
 use codex_notifier_application::{
     AgentError, AgentLease, AgentPolicy, AgentQueue, AgentQueueError, AgentRuntime, AgentState,
@@ -23,7 +23,6 @@ use codex_notifier_core::{
     CanonicalEvent, EventId, EventKind, EventSource, Extensions, Presentation, Privacy, Urgency,
 };
 use codex_notifier_ipc::{AckStatus, IpcClient, IpcEndpoint, IpcError, IpcPolicy};
-use rusqlite::Connection;
 use tempfile::TempDir;
 use time::{Duration, OffsetDateTime};
 use tokio::sync::oneshot;
@@ -851,56 +850,6 @@ async fn future_relay_retry_survives_agent_restart_without_new_submission() {
     assert_eq!(second_report.agent.delivered, 1);
     assert_eq!(second_report.agent.retried, 0);
     assert_eq!(second_report.agent.dead_lettered, 0);
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn relay_lease_outlives_the_maximum_configured_ssh_operation() {
-    let directory = test_directory();
-    let profile = format!(
-        "rl{}_{}",
-        std::process::id(),
-        NEXT_PROFILE.fetch_add(1, Ordering::Relaxed)
-    );
-    let config = config_with_user(
-        &directory,
-        "relay",
-        &profile,
-        Some("config_version = 1\n[relay]\nconnect_timeout_ms = 120000\n"),
-    );
-    let factory = TestFactory::new(TestDelivery::cancel_aware());
-    let host = AgentHost::from_config(&config, &factory).expect("relay host");
-    let runtime = host.runtime();
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let runner = tokio::spawn(async move {
-        host.run_until(async {
-            let _ = shutdown_rx.await;
-        })
-        .await
-    });
-    wait_ready(&runtime).await;
-    runtime.submit(&event(93)).expect("relay submission");
-    tokio::time::timeout(StdDuration::from_secs(2), async {
-        while factory.delivery.active.load(Ordering::Acquire) != 1 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("active relay lease");
-    let connection = Connection::open(database_path(directory.path())).expect("inspect queue");
-    let lease_until_ms: i64 = connection
-        .query_row(
-            "SELECT lease_until_ms FROM outbox WHERE state = 'leased'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("leased deadline");
-    let now_ms = i64::try_from(OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000)
-        .expect("current milliseconds");
-    assert!(lease_until_ms.saturating_sub(now_ms) > 125_000);
-    drop(connection);
-    shutdown_tx.send(()).expect("shutdown");
-    let report = runner.await.expect("runner").expect("host run");
-    assert_eq!(report.agent.released, 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
