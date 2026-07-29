@@ -6,7 +6,7 @@
 Codex 事件转换为 Windows 或 macOS 原生系统通知，并支持 Codex 运行在远程
 服务器上的场景。
 
-> 当前状态：阶段 01-13 已完成，兼容性证据、架构决策、Rust workspace、三平台
+> 当前状态：阶段 01-14 已完成，兼容性证据、架构决策、Rust workspace、三平台
 > 质量门禁、规范事件领域模型、分层配置、跨平台路径规则与结构化脱敏日志模型均已
 > 建立，事务性 SQLite 发件箱/去重存储、有界的用户级本地 IPC、角色感知 agent
 > 生命周期、持久背压和有界 worker 排空也已完成；Codex CLI 0.144.5 的 CLI
@@ -16,7 +16,9 @@ Codex 事件转换为 Windows 或 macOS 原生系统通知，并支持 Codex 运
 > Windows 10 22H2 验证，全新身份的首次投递也已在 Windows 11 验证。macOS
 > UserNotifications 适配器、应用包契约、授权诊断、原生 CI 与无图形会话检查已经
 > 实现；首次授权、明确拒绝、两类事件横幅与勿扰抑制已在 macOS 14.8.7 和当前
-> macOS 26.4 runner 上验证。SSH 尚未实现。
+> macOS 26.4 runner 上验证。本地桌面端生命周期现已支持安装精确验证过的任务完成
+> hook 与用户级自启动资源、运行 agent、查看状态、提交两类显式测试事件、幂等升级，
+> 并在保留事件状态与用户修改的前提下卸载自有资源。SSH 尚未实现。
 
 实施顺序与各阶段验收门槛见 [`stages.md`](stages.md)。
 
@@ -376,19 +378,51 @@ Windows 上的用户配置与状态遵循 `%APPDATA%` 和 `%LOCALAPPDATA%`，mac
 
 ## 命令界面
 
-两类低级 Codex 事件入口和 Codex 能力检查已经实现，其余命令仍保留规划职责：
+本地桌面端生命周期、两类低级 Codex 事件入口和 Codex 能力检查已经实现；远程与
+更完整的诊断命令仍保留规划职责：
 
 | 命令 | 可用性 | 用途 |
 | --- | --- | --- |
 | `emit task-completed` | 已实现 | 面向 Codex、接收已验证 `Stop` 载荷的有界本地事件入口。 |
 | `emit approval-requested` | 已实现 | 接收已验证 app-server 命令审批请求的有界本地事件入口。 |
 | `doctor codex` | 已实现 | 只读报告版本/界面能力与安装选择。 |
-| `agent` | 规划中 | 运行桌面端或中继端用户级进程。 |
+| `agent` | 桌面端已实现 | 运行已配置的用户级桌面端进程。 |
 | `receive` | 规划中 | 桌面端面向受限 SSH 的事件入口。 |
-| `install` / `uninstall` | 规划中 | 管理 Codex 集成与用户自启动产物。 |
+| `install` / `uninstall` | 桌面端已实现 | 可逆地管理已验证 Codex hook 与 Windows/macOS 用户级自启动产物。 |
 | 其他 `doctor` 检查 | 规划中 | 报告 agent、IPC、存储、SSH 与通知状态。 |
-| `test` | 规划中 | 显式发送模拟通知或端到端测试事件。 |
-| `status` | 规划中 | 显示 agent、队列与最近投递状态，不展示事件正文。 |
+| `test` | 桌面端已实现 | 通过本地 IPC 提交显式模拟的任务完成或审批请求事件。 |
+| `status` | 桌面端已实现 | 显示安装、agent、队列、投递与原生通知状态，不展示事件正文。 |
+
+### 本地桌面端生命周期
+
+阶段 14 提供当前基于源码构建的 Windows 与 macOS 命令界面：
+
+```text
+codex-notifier install [--codex-version 0.144.5]
+codex-notifier status
+codex-notifier test [task-completed|approval-requested]
+codex-notifier uninstall
+codex-notifier agent
+```
+
+省略 `--codex-version` 时，`install` 会调用 `codex --version`，且只接受精确验证过的
+`codex-cli 0.144.5` 结果。安装过程以结构化方式合并一个 `Stop` hook，记录其精确
+所有权，创建平台通知身份与用户级自启动资源，启动桌面端 agent，并报告原生通知
+诊断。用户仍需在 Codex 中审阅 hook 信任。普通 CLI 审批 hook 不会被安装；即使
+`test approval-requested` 可验证本地通知链路，安装结果仍明确报告
+`approval_installation=report_unavailable`。
+
+重复安装会原子替换此前拥有的 hook 与应用，不会增加重复 hook 或自启动项。
+`status` 只报告有界元数据。`uninstall` 会移除精确匹配的自有 hook、自启动身份、
+应用和未修改的 installer 创建配置；预先存在或已修改的 hook/配置内容会被保留，
+SQLite 队列、投递记录和系统通知历史始终保留。Windows 上应从外部构建或下载的
+可执行文件运行 `uninstall`，因为已安装进程无法删除自身目录。macOS 上的 `install`
+必须从有效签名的 `Codex Notifier.app` 中运行。Developer ID 签名、公证和发布归档
+仍属于阶段 19。
+
+平台所有权细节见 [`packaging/windows/README.md`](packaging/windows/README.md)
+与 [`packaging/macos/README.md`](packaging/macos/README.md)，执行证据见
+[`docs/verification/stage-14.md`](docs/verification/stage-14.md)。
 
 ### Codex 事件 emit
 
@@ -401,8 +435,8 @@ codex-notifier emit task-completed --codex-version 0.144.5 --state-dir <绝对�
 
 状态目录和 IPC profile 必须与运行中的 agent 一致。主机、项目和路由标签属于可信
 安装参数，绝不从 hook 工作目录复制。命令只接受精确验证过的版本，分别报告事件源
-兼容性错误与 IPC 错误，且不输出载荷正文。把该调用安装进 Codex 配置仍属于阶段 14；
-阶段 10 不修改用户 hook。
+兼容性错误与 IPC 错误，且不输出载荷正文。阶段 14 installer 会把这一精确调用写入
+其拥有的 `Stop` hook 组；受控适配器仍可直接调用该入口。
 
 审批入口使用相同的有界端点与可信上下文参数，读取一个来自已验证 app-server
 界面的原始 `item/commandExecution/requestApproval` JSON-RPC 请求：
@@ -412,8 +446,8 @@ codex-notifier emit approval-requested --codex-version 0.144.5 --state-dir <绝�
 ```
 
 该命令只产生仅供展示的通知事件。app-server 客户端仍需通过原有审批 UI 向 Codex
-回复；`codex-notifier` 不会批准、拒绝、执行或展示待执行命令。完整安装接入仍属于
-阶段 14。
+回复；`codex-notifier` 不会批准、拒绝、执行或展示待执行命令。桌面端 installer
+不会配置该 app-server 路径，并明确报告 CLI 审批通知不可用。
 
 当前最小只读能力检查为：
 

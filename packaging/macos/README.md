@@ -53,6 +53,22 @@ to the documented user log directory, and contains no event text, credentials,
 shell command, or network listener. Installation validates the plist with
 `plutil` before `launchctl bootstrap gui/<uid>`.
 
+## Stage 14 lifecycle
+
+`codex-notifier install` must be invoked by the executable inside a valid
+signed `Codex Notifier.app`. It verifies that source bundle with `codesign`,
+copies the complete bundle atomically to `~/Applications/Codex Notifier.app`,
+writes the exact LaunchAgent above, bootstraps it in the current Aqua domain,
+and records the owned bundle, plist, label, hook, and configuration in the
+bounded manifest.
+
+Reinstallation validates the previous manifest, replaces the signed bundle,
+and reactivates the same LaunchAgent without adding another job. `status`
+checks the installed manifest, startup resource, live agent record, queue, and
+UserNotifications diagnostic. `test` submits either synthetic event kind over
+the normal local IPC path. `uninstall` boots out the job and removes exact
+owned resources while retaining the SQLite queue and receipt database.
+
 ## Owned resources
 
 - The installed `.app` bundle and its exact signed contents

@@ -6,7 +6,7 @@
 It turns Codex events that need human attention into native Windows or macOS
 notifications, including events produced by Codex running on a remote server.
 
-> Status: Stages 01-13 are complete: compatibility evidence, architecture
+> Status: Stages 01-14 are complete: compatibility evidence, architecture
 > decisions, the Rust workspace, three-platform quality gates, and the
 > canonical event domain model, layered configuration, and cross-platform path
 > rules are established, together with structured redacted logging and the
@@ -22,7 +22,11 @@ notifications, including events produced by Codex running on a remote server.
 > adapter, bundle contract, authorization diagnostics, native CI, and headless
 > checks are implemented; first authorization, explicit denial, both event
 > banners, and Do Not Disturb suppression are verified on macOS 14.8.7 and the
-> current macOS 26.4 runner. SSH has not been implemented yet.
+> current macOS 26.4 runner. The local desktop lifecycle now installs the exact
+> verified task-completion hook and per-user startup resources, runs the agent,
+> reports status, submits both explicit test event kinds, upgrades idempotently,
+> and uninstalls owned resources while preserving event state and user edits.
+> SSH has not been implemented yet.
 
 The implementation sequence and acceptance gates are defined in
 [`stages.md`](stages.md).
@@ -442,20 +446,58 @@ output.
 
 ## Command Surface
 
-The two low-level Codex ingestion entries and the Codex capability check are
-implemented. The remaining commands retain their planned responsibilities:
+The local desktop lifecycle, two low-level Codex ingestion entries, and Codex
+capability check are implemented. Remote and broader diagnostic commands retain
+their planned responsibilities:
 
 | Command | Availability | Purpose |
 | --- | --- | --- |
 | `emit task-completed` | Implemented | Codex-facing, bounded local ingestion for the verified `Stop` payload. |
 | `emit approval-requested` | Implemented | Bounded local ingestion for a verified app-server command-approval request. |
 | `doctor codex` | Implemented | Read-only version/interface capability and installation reporting. |
-| `agent` | Planned | Run the per-user desktop or relay process. |
+| `agent` | Implemented for desktop | Run the configured per-user desktop process. |
 | `receive` | Planned | Restricted SSH-facing ingestion on the desktop. |
-| `install` / `uninstall` | Planned | Manage Codex integration and user startup artifacts. |
+| `install` / `uninstall` | Implemented for desktop | Reversibly manage the verified Codex hook and per-user Windows/macOS startup artifacts. |
 | Other `doctor` checks | Planned | Report agent, IPC, storage, SSH, and notification status. |
-| `test` | Planned | Send an explicit synthetic notification or end-to-end test event. |
-| `status` | Planned | Show agent, queue, and last-delivery status without event content. |
+| `test` | Implemented for desktop | Submit an explicit synthetic task-completion or approval-request event over local IPC. |
+| `status` | Implemented for desktop | Show installation, agent, queue, delivery, and native-notification status without event content. |
+
+### Local desktop lifecycle
+
+Stage 14 provides the current source-built Windows and macOS interface:
+
+```text
+codex-notifier install [--codex-version 0.144.5]
+codex-notifier status
+codex-notifier test [task-completed|approval-requested]
+codex-notifier uninstall
+codex-notifier agent
+```
+
+When `--codex-version` is omitted, `install` invokes `codex --version` and
+accepts only the exact verified `codex-cli 0.144.5` result. Installation adds
+one structurally merged `Stop` hook, records its exact ownership, creates the
+platform notification identity and per-user startup resource, starts the
+desktop agent, and reports the native notification diagnostic. Codex still
+requires the user to review hook trust. The ordinary CLI approval hook is not
+installed: `approval_installation=report_unavailable` remains explicit even
+though `test approval-requested` can verify the local notification route.
+
+Reinstallation replaces the previously owned hook and application atomically,
+without adding duplicate hooks or startup entries. `status` reports only
+bounded metadata. `uninstall` removes the exact managed hook, startup identity,
+application, and unchanged installer-created configuration; it preserves
+pre-existing or modified hook/configuration content and always retains the
+SQLite queue, receipts, and notification history. On Windows, run `uninstall`
+from an external build or downloaded executable because the installed process
+cannot remove its own directory. On macOS, `install` must run from a valid
+signed `Codex Notifier.app`. Developer ID signing, notarization, and release
+archives remain Stage 19 work.
+
+See the platform-specific ownership details in
+[`packaging/windows/README.md`](packaging/windows/README.md) and
+[`packaging/macos/README.md`](packaging/macos/README.md), and the executed
+evidence in [`docs/verification/stage-14.md`](docs/verification/stage-14.md).
 
 ### Codex event emit
 
@@ -470,8 +512,8 @@ The state directory and IPC profile must match the running agent. Host,
 project, and route labels are trusted setup values and are never copied from
 the hook working directory. The command accepts only the exact verified
 version, reports source compatibility separately from IPC failures, and emits
-no payload text. Stage 14 remains responsible for installing this invocation
-into Codex configuration; Stage 10 does not modify user hooks.
+no payload text. The Stage 14 installer places this exact invocation in its
+owned `Stop` hook group; direct use remains available for controlled adapters.
 
 The approval entry accepts one raw
 `item/commandExecution/requestApproval` JSON-RPC request from the verified
@@ -484,7 +526,8 @@ codex-notifier emit approval-requested --codex-version 0.144.5 --state-dir <abso
 This command only emits a display-only notification event. The app-server
 client remains responsible for replying to Codex through its existing approval
 UI; `codex-notifier` does not approve, decline, execute, or expose the command.
-Stage 14 remains responsible for installing a complete integration.
+The desktop installer does not configure this app-server path and reports CLI
+approval notifications as unavailable.
 
 The minimal read-only capability check is:
 

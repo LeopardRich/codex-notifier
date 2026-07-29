@@ -39,6 +39,24 @@ not remove user queue data, unrelated Codex hooks, notification history, SSH
 keys, or user-created configuration unless a separate explicit option owns
 that deletion.
 
+## Stage 14 lifecycle
+
+`codex-notifier install` copies the invoking external executable to
+`%LOCALAPPDATA%\Programs\Codex Notifier\codex-notifier.exe`, creates the fixed
+identity and Start Menu shortcut above, and registers the exact
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\CodexNotifier` value with
+the installed executable followed by `agent`. It then starts the agent and
+records the owned application layout and platform identifiers in the bounded
+manifest under the application state directory.
+
+Reinstallation validates that manifest before replacing the executable and
+recreating the same identity, shortcut, and Run value. `status` verifies their
+presence, and `test` submits a synthetic event over the normal local IPC path.
+Because a running Windows executable cannot delete its own directory,
+`uninstall` must be invoked from the external build or downloaded executable,
+not the installed copy. Removal stops the agent, removes exact owned platform
+resources, and retains the SQLite queue and receipt database.
+
 ## Diagnostics
 
 The Windows backend checks the installer-owned per-user registry key before
@@ -53,4 +71,7 @@ saw it. Focus Assist and Do Not Disturb remain higher-priority operating-system
 policy and are never bypassed.
 
 Windows Server editions are outside the Windows 10/11 desktop support scope.
-They report `unsupported_platform` before querying the desktop Toast API.
+An interactive Windows Server process reports `unsupported_platform` before
+querying the desktop Toast API. A Session 0 process reports
+`no_interactive_session` first so automation and service diagnostics remain
+actionable on every Windows host.
