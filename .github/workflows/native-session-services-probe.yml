@@ -397,8 +397,8 @@ jobs:
                               repeat with candidateElement in entire contents of candidateWindow
                                   try
                                       if role of candidateElement is "AXButton" and name of candidateElement is "Allow" then
-                                          click candidateElement
-                                          return "clicked screen-capture Allow in " & processName
+                                          perform action "AXPress" of candidateElement
+                                          return "pressed screen-capture Allow in " & processName
                                       end if
                                   end try
                               end repeat
@@ -409,7 +409,7 @@ jobs:
               return "screen-capture Allow not found"
           end tell
           APPLESCRIPT
-            if grep -q '^clicked ' target/macos-screen-permission.txt; then
+            if grep -q '^pressed ' target/macos-screen-permission.txt; then
               break
             fi
             sleep 0.25
@@ -621,8 +621,36 @@ jobs:
                                           if role of candidateElement is "AXButton" and name of candidateElement is "Allow" then
                                               set screenshotPath to system attribute "CODEX_PROBE_SCREENSHOT"
                                               do shell script "/usr/sbin/screencapture -x " & quoted form of screenshotPath
-                                              click candidateElement
+                                              perform action "AXPress" of candidateElement
                                               return "clicked=notification process=" & processName & " text=" & windowText
+                                          end if
+                                      end try
+                                  end repeat
+                                  repeat with candidateElement in candidateElements
+                                      try
+                                          set elementText to ""
+                                          try
+                                              set elementText to elementText & " " & (name of candidateElement as text)
+                                          end try
+                                          try
+                                              set elementText to elementText & " " & (value of candidateElement as text)
+                                          end try
+                                          if elementText contains "Codex Notifier" or elementText contains "Notifications may include" then
+                                              set screenshotPath to system attribute "CODEX_PROBE_SCREENSHOT"
+                                              do shell script "/usr/sbin/screencapture -x " & quoted form of screenshotPath
+                                              set pressTarget to candidateElement
+                                              repeat 4 times
+                                                  try
+                                                      perform action "AXPress" of pressTarget
+                                                      return "pressed=banner process=" & processName & " element=" & elementText
+                                                  on error
+                                                      try
+                                                          set pressTarget to parent of pressTarget
+                                                      on error
+                                                          exit repeat
+                                                      end try
+                                                  end try
+                                              end repeat
                                           end if
                                       end try
                                   end repeat
