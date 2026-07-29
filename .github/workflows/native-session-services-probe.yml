@@ -698,16 +698,25 @@ jobs:
           if [[ -n "$login_keychain" ]]; then
             security list-keychains -d user -s "$login_keychain"
           fi
-          if [[ -n "${CODEX_NOTIFIER_MACOS_SIGNING_DIRECTORY:-}" ]] &&
-            [[ -f "$CODEX_NOTIFIER_MACOS_SIGNING_DIRECTORY/root.pem" ]]; then
-            sudo security remove-trusted-cert \
-              -d \
-              "$CODEX_NOTIFIER_MACOS_SIGNING_DIRECTORY/root.pem"
-          fi
           if [[ -n "${CODEX_NOTIFIER_MACOS_SIGNING_ROOT_IDENTITY:-}" ]]; then
             sudo security delete-certificate \
               -Z "$CODEX_NOTIFIER_MACOS_SIGNING_ROOT_IDENTITY" \
-              /Library/Keychains/System.keychain
+              /Library/Keychains/System.keychain &
+            certificate_cleanup_pid=$!
+            for attempt in $(seq 1 50); do
+              if ! kill -0 "$certificate_cleanup_pid" 2>/dev/null; then
+                wait "$certificate_cleanup_pid" 2>/dev/null
+                certificate_cleanup_pid=''
+                break
+              fi
+              sleep 0.1
+            done
+            if [[ -n "$certificate_cleanup_pid" ]]; then
+              kill "$certificate_cleanup_pid" 2>/dev/null
+              wait "$certificate_cleanup_pid" 2>/dev/null
+              echo 'System certificate cleanup timed out' \
+                >>target/macos-signing-trust.txt
+            fi
           fi
           if [[ -n "${CODEX_NOTIFIER_MACOS_SIGNING_DIRECTORY:-}" ]]; then
             rm -rf "$CODEX_NOTIFIER_MACOS_SIGNING_DIRECTORY"
