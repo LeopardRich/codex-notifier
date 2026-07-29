@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -218,6 +218,53 @@ fn wait_for_sshd(port: u16) {
         std::thread::sleep(StdDuration::from_millis(25));
     }
     panic!("temporary sshd did not start");
+}
+
+fn assert_local_forward_rejected(mut command: Command, port: u16, user: &str) {
+    let target = TcpListener::bind(("127.0.0.1", 0)).expect("forward target");
+    target.set_nonblocking(true).expect("nonblocking target");
+    let target_port = target.local_addr().expect("target address").port();
+    let forwarding_port = free_port();
+    command
+        .args(["-N", "-o", "ExitOnForwardFailure=yes", "-L"])
+        .arg(format!(
+            "127.0.0.1:{forwarding_port}:127.0.0.1:{target_port}"
+        ))
+        .args(["-p", &port.to_string()])
+        .arg(format!("{user}@127.0.0.1"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("local forwarding client");
+    let deadline = Instant::now() + StdDuration::from_secs(5);
+    let mut forwarded_client = loop {
+        match TcpStream::connect(("127.0.0.1", forwarding_port)) {
+            Ok(stream) => break stream,
+            Err(_) if Instant::now() < deadline => {
+                std::thread::sleep(StdDuration::from_millis(25));
+            }
+            Err(_) => panic!("local forwarding listener did not start"),
+        }
+    };
+    forwarded_client
+        .set_read_timeout(Some(StdDuration::from_secs(2)))
+        .expect("forward read timeout");
+    let _ = forwarded_client.write_all(b"forwarding probe");
+    let mut response = [0_u8; 1];
+    assert!(
+        matches!(forwarded_client.read(&mut response), Ok(0) | Err(_)),
+        "local forwarding returned target data"
+    );
+    assert!(
+        target.accept().is_err(),
+        "local forwarding reached its target"
+    );
+    let _ = child.kill();
+    let output = child.wait_with_output().expect("local forwarding output");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("administratively prohibited"),
+        "local forwarding denial was not reported"
+    );
 }
 
 async fn wait_for_deliveries(delivery: &RecordingDelivery, expected: usize) {
@@ -463,28 +510,28 @@ async fn real_forced_openssh_session_enforces_the_receive_boundary() {
     let output = ssh_request(pty, port, &user, Some("codex-notifier receive"), b"");
     assert!(String::from_utf8_lossy(&output.stderr).contains("PTY allocation request failed"));
 
-    for option in ["-L", "-R"] {
-        let forwarding_port = free_port();
-        let mut forwarding = ssh_command(&client_key, &known_hosts);
-        forwarding
-            .args(["-o", "ExitOnForwardFailure=yes", option])
-            .arg(format!("127.0.0.1:{forwarding_port}:127.0.0.1:22"));
-        let output = ssh_request(
-            forwarding,
-            port,
-            &user,
-            Some("codex-notifier receive"),
-            &event("forwarding").to_json().expect("forwarding event"),
-        );
-        assert!(
-            !output.status.success(),
-            "{option} forwarding was not rejected"
-        );
-        assert!(
-            String::from_utf8_lossy(&output.stderr).contains("administratively prohibited")
-                || String::from_utf8_lossy(&output.stderr).contains("forwarding failed")
-        );
-    }
+    assert_local_forward_rejected(ssh_command(&client_key, &known_hosts), port, &user);
+
+    let forwarding_port = free_port();
+    let mut remote_forwarding = ssh_command(&client_key, &known_hosts);
+    remote_forwarding
+        .args(["-o", "ExitOnForwardFailure=yes", "-R"])
+        .arg(format!("127.0.0.1:{forwarding_port}:127.0.0.1:22"));
+    let output = ssh_request(
+        remote_forwarding,
+        port,
+        &user,
+        Some("codex-notifier receive"),
+        &event("forwarding").to_json().expect("forwarding event"),
+    );
+    assert!(
+        !output.status.success(),
+        "remote forwarding was not rejected"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("administratively prohibited")
+            || String::from_utf8_lossy(&output.stderr).contains("forwarding failed")
+    );
 
     assert_eq!(delivery.count(), 1);
     shutdown_tx.send(()).expect("agent shutdown");
