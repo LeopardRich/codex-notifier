@@ -19,7 +19,7 @@ Use the following release-gating profile for one user-level agent:
 - A supported `emit` child must parse one real source fixture, submit it, and
   exit after durable acknowledgement within 5 seconds.
 - A 100-event sequential IPC burst must reach notification-adapter acceptance
-  and durable receipts within 10 seconds.
+  and durable receipts within 30 seconds.
 - The four-worker agent must remain at or below 512 MiB resident memory in the
   test process during that burst.
 - The SQLite main, WAL, and shared-memory files must total at most 8 MiB after
@@ -49,6 +49,9 @@ deterministic or proportional to this per-user tool.
 
 ## Consequences
 
+The 30-second batch ceiling limits average sequential acceptance to 300 ms per
+event while tolerating hosted Windows named-pipe scheduling and security-scan
+variance; the separate 5-second hook ceiling remains the user-facing bound.
 The normal retry path is flood-resistant and measurable. Operators can still
 see a repeated notification after the narrow pre-acknowledgement crash window,
 which is preferable to losing an attention event. The generous CI ceilings

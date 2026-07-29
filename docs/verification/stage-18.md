@@ -95,6 +95,14 @@ The normative evidence levels and four-path matrix are in
   boundary, empty receiver probe, offline retry/recovery, remote self-test,
   duplicate acknowledgement, and both task-completion and approval-request
   desktop deliveries.
+- Evidence-head run
+  [`30496736306`](https://github.com/LeopardRich/codex-notifier/actions/runs/30496736306)
+  exposed that the provisional 10-second batch ceiling was too narrow for
+  hosted Windows variance: all 100 durable deliveries completed in 11,414 ms
+  with 23,617,536 RSS bytes and a 65,536-byte database. macOS 14, current macOS,
+  and the real OpenSSH job remained green. ADR-0007 now uses a conservative
+  30-second batch ceiling, which still bounds average sequential acceptance to
+  300 ms while preserving the independent 5-second per-hook limit.
 - The `actions/checkout@v4` Node.js 20 deprecation notice is a non-blocking
   upstream action warning; all project checks completed successfully.
 

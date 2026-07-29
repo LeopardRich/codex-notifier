@@ -52,7 +52,7 @@ lease without consuming a retry attempt.
   new submission, and deduplicates a resend after destination delivery.
 - Unknown event schema versions and newer SQLite schema versions are rejected
   before delivery or migration.
-- ADR-0007 fixes the 5-second hook, 10-second 100-event batch, 512 MiB RSS,
+- ADR-0007 fixes the 5-second hook, 30-second 100-event batch, 512 MiB RSS,
   8 MiB database, and configured-worker-count ceilings.
 
 The automated baseline prints one payload-free line containing event count,

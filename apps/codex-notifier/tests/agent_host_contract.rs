@@ -29,7 +29,7 @@ use time::{Duration, OffsetDateTime};
 use tokio::sync::oneshot;
 
 const HOOK_RETURN_LIMIT: StdDuration = StdDuration::from_secs(5);
-const BATCH_DELIVERY_LIMIT: StdDuration = StdDuration::from_secs(10);
+const BATCH_DELIVERY_LIMIT: StdDuration = StdDuration::from_secs(30);
 const PROCESS_RSS_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 const DATABASE_SIZE_LIMIT_BYTES: u64 = 8 * 1024 * 1024;
 
