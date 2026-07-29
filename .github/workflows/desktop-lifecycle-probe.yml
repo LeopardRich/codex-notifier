@@ -263,11 +263,11 @@ jobs:
           openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 1 -config "$directory/root.cnf" -keyout "$directory/root.key" -out "$directory/root.pem"
           openssl req -new -newkey rsa:2048 -nodes -sha256 -config "$directory/leaf.cnf" -keyout "$directory/leaf.key" -out "$directory/leaf.csr"
           openssl x509 -req -sha256 -days 1 -in "$directory/leaf.csr" -CA "$directory/root.pem" -CAkey "$directory/root.key" -CAcreateserial -extfile "$directory/leaf.cnf" -extensions extensions -out "$directory/leaf.pem"
-          pkcs12_options=()
           if (( $(sw_vers -productVersion | cut -d. -f1) > 14 )); then
-            pkcs12_options=(-legacy)
+            openssl pkcs12 -export -legacy -inkey "$directory/leaf.key" -in "$directory/leaf.pem" -certfile "$directory/root.pem" -out "$directory/leaf.p12" -passout "pass:$password"
+          else
+            openssl pkcs12 -export -inkey "$directory/leaf.key" -in "$directory/leaf.pem" -certfile "$directory/root.pem" -out "$directory/leaf.p12" -passout "pass:$password"
           fi
-          openssl pkcs12 -export "${pkcs12_options[@]}" -inkey "$directory/leaf.key" -in "$directory/leaf.pem" -certfile "$directory/root.pem" -out "$directory/leaf.p12" -passout "pass:$password"
           security create-keychain -p "$password" "$keychain"
           security set-keychain-settings -lut 21600 "$keychain"
           security unlock-keychain -p "$password" "$keychain"
