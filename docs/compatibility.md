@@ -1,8 +1,8 @@
 # Compatibility Matrix
 
-Status: Stage 01 completed for the initial Codex CLI 0.144.5 target on Windows.
-Support is interface-specific; no macOS result or broader version range may be
-inferred from this file.
+Status: Stage 10 implements task-completion ingestion for the initial Codex CLI
+0.144.5 target verified on Windows. Support is interface-specific; no macOS
+Codex fixture result or broader version range may be inferred from this file.
 
 ## Target matrix
 
@@ -47,6 +47,21 @@ The initial sandboxed authentication failure was caused by the execution
 environment redirecting Codex to an isolated home directory. A read-only check
 outside that sandbox confirmed the user's real Codex login remained intact.
 No login, logout, credential write, or user-hook modification was performed.
+
+## Implemented task-completion adapter
+
+The Stage 10 adapter accepts only the exact CLI `Stop` shape preserved by the
+Windows fixture above. It requires every observed field, rejects type changes,
+unknown fields and payloads over 32 KiB, and does not use transcripts or
+terminal output as a fallback. The raw session identifier is replaced by a
+SHA-256 digest; cwd, transcript path, model, turn identifier and assistant
+message are discarded. Presentation text is the fixed private task-completion
+text from ADR-0003.
+
+The `emit task-completed` path generates a fresh `UUIDv7` at ingestion and
+submits the canonical event over per-user local IPC. Cross-platform CI exercises
+the platform-independent normalization contract and local IPC integration, but
+does not constitute a real macOS Codex hook capture.
 
 ## Fallback behavior
 

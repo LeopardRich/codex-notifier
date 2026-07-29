@@ -6,14 +6,15 @@
 It turns Codex events that need human attention into native Windows or macOS
 notifications, including events produced by Codex running on a remote server.
 
-> Status: Stages 01-09 are complete: compatibility evidence, architecture
+> Status: Stages 01-10 are complete: compatibility evidence, architecture
 > decisions, the Rust workspace, three-platform quality gates, and the
 > canonical event domain model, layered configuration, and cross-platform path
 > rules are established, together with structured redacted logging and the
 > transactional SQLite outbox/deduplication store and bounded per-user local
 > IPC. The role-aware agent lifecycle, durable backpressure, and bounded worker
-> drain are also complete. SSH and native notification adapters have not been
-> implemented yet.
+> drain are also complete. The exact Codex CLI 0.144.5 `Stop` hook adapter and
+> bounded task-completion `emit` path are implemented. Approval ingestion, SSH,
+> and native notification adapters have not been implemented yet.
 
 The implementation sequence and acceptance gates are defined in
 [`stages.md`](stages.md).
@@ -60,16 +61,16 @@ flowchart TD
 Codex integration is isolated behind source adapters because event availability
 can differ by Codex version and interface.
 
-| Product event | Required Codex capability | Planned behavior |
+| Product event | Required Codex capability | Current behavior |
 | --- | --- | --- |
-| Task completed | An external notification/hook event for turn completion | Normalize the payload and enqueue `task_completed`. |
+| Task completed | An external notification/hook event for turn completion | Implemented for the exact Codex CLI 0.144.5 CLI `Stop` hook shape; normalize and enqueue `task_completed`. |
 | Approval requested | An external notification/hook event for an approval request | Normalize the payload and enqueue `approval_requested`; report the feature as unavailable when the installed Codex version does not expose it. |
 
 The implementation must detect capabilities during `doctor` and installation.
 It must not scrape terminal output or private session logs as a silent fallback.
-Before implementation, these adapter contracts must be checked against the
-target Codex CLI release. This repository intentionally does not claim that all
-Codex versions expose both events to external programs.
+Adapter contracts are gated by sanitized real-event fixtures for each exact
+Codex version and interface. This repository intentionally does not claim that
+all Codex versions expose both events to external programs.
 
 The initial version floor is Codex CLI 0.144.5. Stage 01 verified task
 completion through the `codex exec` `Stop` hook and approval requests through
@@ -353,20 +354,36 @@ access tokens, passwords, prompts, model output, and raw event payloads are
 not valid configuration values and are never included in configuration debug
 output.
 
-## Planned Command Surface
+## Command Surface
 
-The final command names may change during implementation, but responsibilities
-remain separated:
+Only the low-level task-completion ingestion entry is implemented at Stage 10.
+The remaining commands retain their planned responsibilities:
 
-| Command | Purpose |
-| --- | --- |
-| `agent` | Run the per-user desktop or relay process. |
-| `emit` | Codex-facing, fast local event ingestion. |
-| `receive` | Restricted SSH-facing ingestion on the desktop. |
-| `install` / `uninstall` | Manage Codex integration and user startup artifacts. |
-| `doctor` | Run read-only capability and connectivity checks. |
-| `test` | Send an explicit synthetic notification or end-to-end test event. |
-| `status` | Show agent, queue, and last-delivery status without event content. |
+| Command | Availability | Purpose |
+| --- | --- | --- |
+| `emit task-completed` | Implemented | Codex-facing, bounded local ingestion for the verified `Stop` payload. |
+| `agent` | Planned | Run the per-user desktop or relay process. |
+| `receive` | Planned | Restricted SSH-facing ingestion on the desktop. |
+| `install` / `uninstall` | Planned | Manage Codex integration and user startup artifacts. |
+| `doctor` | Planned | Run read-only capability and connectivity checks. |
+| `test` | Planned | Send an explicit synthetic notification or end-to-end test event. |
+| `status` | Planned | Show agent, queue, and last-delivery status without event content. |
+
+### Task-completion emit
+
+The Stage 10 executable entry reads one raw Codex `Stop` hook JSON object from
+stdin and accepts at most 32 KiB. Its current low-level invocation is:
+
+```text
+codex-notifier emit task-completed --codex-version 0.144.5 --state-dir <absolute-state-directory> --ipc-profile <agent-ipc-profile> --host-label <display-label> [--project-label <display-label>] [--routing-profile <profile>]
+```
+
+The state directory and IPC profile must match the running agent. Host,
+project, and route labels are trusted setup values and are never copied from
+the hook working directory. The command accepts only the exact verified
+version, reports source compatibility separately from IPC failures, and emits
+no payload text. Stage 14 remains responsible for installing this invocation
+into Codex configuration; Stage 10 does not modify user hooks.
 
 ## Repository Layout
 
