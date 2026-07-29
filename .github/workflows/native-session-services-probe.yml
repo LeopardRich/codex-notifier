@@ -380,6 +380,44 @@ jobs:
           } >>target/macos-session-services.txt 2>&1
           launchctl print "gui/$uid/$agent" >/dev/null
 
+      - name: Prepare screen capture separately
+        shell: bash
+        run: |
+          set +e
+          screencapture -x target/macos-screen-preflight.png \
+            2>target/macos-screen-preflight-error.txt
+          for attempt in $(seq 1 40); do
+            osascript >target/macos-screen-permission.txt 2>&1 <<'APPLESCRIPT'
+          tell application "System Events"
+              repeat with candidateProcess in application processes
+                  try
+                      set processName to name of candidateProcess as text
+                      if processName contains "Notification" then
+                          repeat with candidateWindow in windows of candidateProcess
+                              repeat with candidateElement in entire contents of candidateWindow
+                                  try
+                                      if role of candidateElement is "AXButton" and name of candidateElement is "Allow" then
+                                          click candidateElement
+                                          return "clicked screen-capture Allow in " & processName
+                                      end if
+                                  end try
+                              end repeat
+                          end repeat
+                      end if
+                  end try
+              end repeat
+              return "screen-capture Allow not found"
+          end tell
+          APPLESCRIPT
+            if grep -q '^clicked ' target/macos-screen-permission.txt; then
+              break
+            fi
+            sleep 0.25
+          done
+          sleep 2
+          screencapture -x target/macos-screen-ready.png \
+            2>target/macos-screen-ready-error.txt
+
       - name: Build macOS smoke executable
         run: cargo test -p codex-notifier-native-notification --test macos_smoke --no-run
 
@@ -552,43 +590,54 @@ jobs:
           smoke_pid=$!
 
           sleep 2
+          screencapture -x target/macos-before.png \
+            2>target/macos-before-error.txt
           clicked=''
           for attempt in $(seq 1 80); do
-            osascript >target/macos-ui-current.txt 2>&1 <<'APPLESCRIPT'
+            CODEX_PROBE_SCREENSHOT="$PWD/target/macos-permission-prompt.png" \
+              osascript >target/macos-ui-current.txt 2>&1 <<'APPLESCRIPT'
           tell application "System Events"
+              set observations to ""
               repeat with candidateProcess in application processes
                   try
                       set processName to name of candidateProcess as text
                       if processName contains "Notification" or processName is "System Settings" then
+                          set observations to observations & " process=" & processName & " windows=" & (count windows of candidateProcess)
                           repeat with candidateWindow in windows of candidateProcess
-                          set candidateElements to entire contents of candidateWindow
-                          set windowText to ""
-                          repeat with candidateElement in candidateElements
-                              try
-                                  set windowText to windowText & " " & (name of candidateElement as text)
-                              end try
-                              try
-                                  set windowText to windowText & " " & (value of candidateElement as text)
-                              end try
-                          end repeat
-                          if windowText contains "Codex Notifier" and windowText contains "Notifications" then
+                              set candidateElements to entire contents of candidateWindow
+                              set windowText to ""
                               repeat with candidateElement in candidateElements
                                   try
-                                      if role of candidateElement is "AXButton" and name of candidateElement is "Allow" then
-                                          click candidateElement
-                                          return "clicked=notification process=" & processName & " text=" & windowText
-                                      end if
+                                      set windowText to windowText & " " & (name of candidateElement as text)
+                                  end try
+                                  try
+                                      set windowText to windowText & " " & (value of candidateElement as text)
                                   end try
                               end repeat
-                          end if
+                              set observations to observations & " text=" & windowText
+                              if windowText contains "Codex Notifier" and windowText contains "Notifications" then
+                                  repeat with candidateElement in candidateElements
+                                      try
+                                          if role of candidateElement is "AXButton" and name of candidateElement is "Allow" then
+                                              set screenshotPath to system attribute "CODEX_PROBE_SCREENSHOT"
+                                              do shell script "/usr/sbin/screencapture -x " & quoted form of screenshotPath
+                                              click candidateElement
+                                              return "clicked=notification process=" & processName & " text=" & windowText
+                                          end if
+                                      end try
+                                  end repeat
+                              end if
                           end repeat
                       end if
+                  on error errorMessage
+                      set observations to observations & " process-error=" & errorMessage
                   end try
               end repeat
-              return "notification Allow not found"
+              return "notification Allow not found" & observations
           end tell
           APPLESCRIPT
             cat target/macos-ui-current.txt >target/macos-ui.txt
+            cat target/macos-ui-current.txt >>target/macos-ui-history.txt
             if grep -q '^clicked=' target/macos-ui-current.txt; then
               clicked=1
               break
@@ -598,6 +647,8 @@ jobs:
             fi
             sleep 0.5
           done
+          screencapture -x target/macos-after.png \
+            2>target/macos-after-error.txt
 
           result=''
           for attempt in $(seq 1 80); do
