@@ -1,6 +1,6 @@
 # Stage 12 Verification
 
-Status: In progress
+Status: Complete
 
 Date: 2026-07-29
 
@@ -10,8 +10,12 @@ Scope: Windows native Toast adapter and diagnostics.
 
 - Windows implementation and dependencies are selected only by `cfg(windows)`.
 - The backend uses the safe `windows-rs` WinRT projection, validates the fixed
-  PascalCase product AUMID `LeopardRich.CodexNotifier`, rejects Session 0, and
-  checks `ToastNotifier.Setting` before delivery.
+  PascalCase product AUMID `LeopardRich.CodexNotifier` and the installer-owned
+  per-user registration key through safe `winreg`, rejects Session 0, and
+  checks `ToastNotifier.Setting` before delivery. A registered first-use
+  identity may submit its initial Toast when Windows has not created the
+  settings record yet; an absent or unreadable registration does not use this
+  path.
 - Missing identity, application/user/policy disablement, unavailable API,
   non-interactive session, and delivery failure have distinct stable status and
   error codes.
@@ -42,6 +46,11 @@ Scope: Windows native Toast adapter and diagnostics.
   for commit `69143203a1bd7754eb4fbd2bde55cdd83aa132cd` passed formatting,
   warnings-as-errors Clippy, and workspace tests on Windows, macOS, and Linux.
   Normal CI did not execute any ignored Windows real-state test.
+- On the final first-use implementation, local Rust 1.88 GNU full-workspace
+  Clippy passed with all targets, all features, and warnings denied, and all 87
+  automated tests passed. GitHub Actions run
+  [`30456545145`](https://github.com/LeopardRich/codex-notifier/actions/runs/30456545145)
+  passed the permanent Windows, Linux, macOS 14, and current macOS jobs.
 
 ## Real-state verification
 
@@ -90,13 +99,45 @@ Scope: Windows native Toast adapter and diagnostics.
   submitted no Toast. The workflow's green conclusion only reflects bounded
   evidence collection; this failed inner smoke is not Windows 11 support
   evidence.
+- Follow-up run
+  [`30451831965`](https://github.com/LeopardRich/codex-notifier/actions/runs/30451831965)
+  isolated Windows 11 first-use behavior. With the same indexed shortcut and
+  registry identity, `CreateToastNotifierWithId` succeeded, the initial raw
+  `Show` succeeded, and `Setting` immediately changed from `ERROR_NOT_FOUND` to
+  `Enabled`. The normal product smoke then accepted both event kinds. This
+  proved that the original diagnostic was querying Windows before WPN lazily
+  created its notification handler; the raw call remained probe-only and was
+  not adopted as a product fallback.
+- The backend was corrected to verify the installer-owned per-user registration
+  key before treating that first-use `ERROR_NOT_FOUND` as ready. The missing
+  diagnostic identity still reports `application_identity_missing`, while
+  explicit application, user, policy, manifest, Session 0, unavailable, and
+  delivery states retain their prior classifications.
+- Final unseeded run
+  [`30456545651`](https://github.com/LeopardRich/codex-notifier/actions/runs/30456545651)
+  exercised Windows 11 Enterprise build 26200 on Arm64 in interactive Session
+  2. It created a fresh install-grade shortcut, icon, and per-user registration,
+  verified all three identity indexes, and launched only the normal two-event
+  product smoke through the shortcut. `ShortcutExitCode=0` proves the product
+  diagnostic reported `Ready` and both task-completion and approval-request
+  `Show` calls succeeded without a raw seed or pre-existing WPN settings row.
+  An earlier successful follow-up capture in run
+  [`30452915231`](https://github.com/LeopardRich/codex-notifier/actions/runs/30452915231)
+  visibly showed the `Codex Notifier` group in Windows 11 Notification Center
+  under Do Not Disturb, including `Codex needs approval` and two additional
+  accepted notifications. API success is cited as acceptance, not proof that a
+  user opened a notification.
 - All temporary Start Menu shortcuts and unpackaged-app registration values
   were removed. The Windows-owned notification-history key was retained, and
   the Settings window and local test server were closed. No user startup item
   or Codex hook was changed.
 
-## Required before completion
+## Completion decision
 
-- Repeat both Toasts on the latest supported Windows 11 release.
-- Until this real-platform item is complete, Stage 12 must not be marked
-  complete. Windows 10 evidence is not a Windows 11 support claim.
+- The minimum Windows 10 22H2 and latest Windows 11 paths have each accepted
+  both product event kinds through a real interactive user session.
+- Disabled application, Focus Assist/Do Not Disturb, missing identity, and
+  Session 0 behavior have real-state evidence, while automated tests cover
+  bounded text, XML safety, routing policy, and non-Windows isolation.
+- Stage 12 is complete. Stage 13 remains an independent gate, so Stage 14 must
+  not start until the macOS requirements in `stage-13.md` pass.

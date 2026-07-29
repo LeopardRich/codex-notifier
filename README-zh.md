@@ -6,16 +6,17 @@
 Codex 事件转换为 Windows 或 macOS 原生系统通知，并支持 Codex 运行在远程
 服务器上的场景。
 
-> 当前状态：阶段 01-11 已完成，兼容性证据、架构决策、Rust workspace、三平台
+> 当前状态：阶段 01-12 已完成，兼容性证据、架构决策、Rust workspace、三平台
 > 质量门禁、规范事件领域模型、分层配置、跨平台路径规则与结构化脱敏日志模型均已
 > 建立，事务性 SQLite 发件箱/去重存储、有界的用户级本地 IPC、角色感知 agent
 > 生命周期、持久背压和有界 worker 排空也已完成；Codex CLI 0.144.5 的 CLI
 > `Stop` hook 与 app-server 命令审批请求均已有精确适配器、有界本地 `emit` 路径和
 > 只读能力报告。Windows WinRT 适配器、策略映射、诊断与自动化契约已经实现；产品
 > 身份 Toast 投递以及真实的应用级关闭、专注助手、身份缺失和 Session 0 状态已在
-> Windows 10 22H2 验证，Windows 11 尚未验证。macOS UserNotifications 适配器、
-> 应用包契约、授权诊断、原生 CI 与无图形会话检查已经实现，真实交互式通知测试仍待
-> 完成。SSH 尚未实现。
+> Windows 10 22H2 验证，全新身份的首次投递也已在 Windows 11 验证。macOS
+> UserNotifications 适配器、应用包契约、授权诊断、原生 CI 与无图形会话检查已经
+> 实现，但托管 runner 无法完成真实的交互授权、拒绝、专注模式和显示门禁。SSH 尚未
+> 实现。
 
 实施顺序与各阶段验收门槛见 [`stages.md`](stages.md)。
 
@@ -273,16 +274,20 @@ Windows 适配器只在 `cfg(windows)` 下编译，并使用 `windows-rs` WinRT 
 字符串插值。应用免打扰会抑制弹窗和声音，但仍把通知交给通知中心。版本 1 不包含
 动作、启动 URI、回复框、命令或远程审批控制。
 
-后端校验产品 AUMID `LeopardRich.CodexNotifier`，拒绝 Session 0，并分别诊断身份
-缺失、应用级关闭、用户全局关闭、组策略关闭、API 不可用和投递拒绝。Windows
-专注助手与勿扰仍由操作系统管理；诊断报告 `system_managed`，不声称能够读取公开
-Toast API 没有暴露的活动状态。打包资源和可回滚所有权契约见
+后端校验产品 AUMID `LeopardRich.CodexNotifier` 及安装器拥有的当前用户注册表
+身份，拒绝 Session 0，并分别诊断身份缺失、应用级关闭、用户全局关闭、组策略关闭、
+API 不可用和投递拒绝。已注册身份首次使用时，可以在 Windows 尚未创建通知设置记录
+前提交第一条 Toast。Windows 专注助手与勿扰仍由操作系统管理；诊断报告
+`system_managed`，不声称能够读取公开 Toast API 没有暴露的活动状态。打包资源和
+可回滚所有权契约见
 [`packaging/windows/README.md`](packaging/windows/README.md)。
 
 适配器自动化契约已在 Windows 10 22H2 通过。使用产品 AUMID 创建临时的当前用户
 非打包应用注册后，被忽略的双事件冒烟测试已经通过：WinRT 接受了两条真实 Toast，
 Windows 通知数据库也保存了两条准确的固定私密载荷。真实的应用级关闭和专注助手
-“仅优先通知”状态均已测试并恢复。Windows 11 冒烟测试仍未完成。详见
+“仅优先通知”状态均已测试并恢复。在 Windows 11 Enterprise build 26200 Arm64
+上，全新安装级身份无需原始通知或既有设置记录即可通过相同的双事件产品冒烟测试；
+通知中心也在勿扰开启时渲染了产品通知组。详见
 [`docs/verification/stage-12.md`](docs/verification/stage-12.md)。
 
 ### macOS 原生通知
@@ -305,8 +310,11 @@ passive level。适配器绝不使用会绕过专注模式的 time-sensitive 或
 应用包、Developer ID 签名、公证与 Aqua LaunchAgent 的资源契约见
 [`packaging/macos/README.md`](packaging/macos/README.md)。被忽略的冒烟测试会自行
 构造并临时签名前台测试应用包，向 LaunchServices 注册后在进程主线程启动 AppKit，
-通过产品后端显式请求授权，然后提交两类事件。托管 macOS 会话未显示系统权限界面，
-因此 macOS 14 与最新支持版本上的真实视觉确认仍未验证；详见
+通过产品后端显式请求授权，然后提交两类事件。即使启用了被禁用的通知 UI agent，
+并让应用包使用本机信任的签名身份，托管 macOS 会话仍未显示系统权限界面。两台主机
+都已到达 UserNotifications，但没有产生回调或提示，Notification Center 还报告了
+无效的 `usernoted` 连接。因此 macOS 14 与最新支持版本上的真实授权、拒绝、专注
+模式和视觉确认仍未验证；详见
 [`docs/verification/stage-13.md`](docs/verification/stage-13.md)。
 
 ## 安全模型

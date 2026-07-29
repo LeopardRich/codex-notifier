@@ -9,9 +9,11 @@ called.
 
 The Windows implementation uses safe `windows-rs` WinRT projections and builds
 Toast XML through DOM nodes rather than payload interpolation. It validates the
-product AUMID, rejects Session 0, checks `ToastNotifier.Setting`, and returns
-separate identity, application-disabled, user-disabled, policy-disabled,
-session, availability, and delivery classifications. Focus/do-not-disturb is
+product AUMID and installer-owned per-user registry key, rejects Session 0,
+checks `ToastNotifier.Setting`, and permits a registered identity's first Toast
+to initialize the Windows notification handler. It returns separate identity,
+application-disabled, user-disabled, policy-disabled, session, availability,
+and delivery classifications. Focus/do-not-disturb is
 owned by Windows; the diagnostic reports `system_managed` instead of claiming
 to know a state that the public Toast API does not expose.
 

@@ -41,7 +41,11 @@ that deletion.
 
 ## Diagnostics
 
-The Windows backend reports missing/manifest-disabled identity, per-application
+The Windows backend checks the installer-owned per-user registry key before
+using an AUMID. Windows 11 can return `ERROR_NOT_FOUND` from
+`ToastNotifier.Setting` before its first accepted Toast creates the notification
+handler; that state is ready only when the registration key exists. The backend
+otherwise reports missing/manifest-disabled identity, per-application
 disablement, global user disablement, group-policy disablement, non-interactive
 Session 0, native API unavailability, and delivery rejection separately. A
 successful `Show` means Windows accepted the Toast; it does not prove the user

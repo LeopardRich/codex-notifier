@@ -117,6 +117,43 @@ and packaging resources.
   automation found no `Allow` button, the completion callback did not run, and
   no success marker was written. These runs establish a hosted-session
   limitation, not a successful authorization or notification display.
+- Session-service probes
+  [`30449966627`](https://github.com/LeopardRich/codex-notifier/actions/runs/30449966627)
+  and
+  [`30451095267`](https://github.com/LeopardRich/codex-notifier/actions/runs/30451095267)
+  separated the hosted runner's screen-capture permission from notification
+  permission, started `UserNotificationCenter`, and invoked
+  `UNUserNotificationCenter` directly from the AppKit main thread. No prompt or
+  callback appeared on macOS 14.8.7 or macOS 26.4.
+- The repository Actions API reported zero configured repository secrets, so
+  the probe had no Apple Development or Developer ID signing identity. A
+  bounded alternative generated a temporary code-signing certificate and
+  root, imported them into an ephemeral keychain, and added the root to the
+  ephemeral host's system trust domain. In final run
+  [`30454957673`](https://github.com/LeopardRich/codex-notifier/actions/runs/30454957673),
+  both hosts reported `1 valid identities found`; `codesign` recorded the
+  expected bundle identifier and certificate authorities. This was a locally
+  trusted diagnostic signature, not an Apple-issued release identity, and its
+  `TeamIdentifier` remained unset.
+- The same final probe found `com.apple.notificationcenterui.agent` disabled by
+  the hosted image, reversibly enabled it in the current user's launch domain,
+  and verified the service was running and the override was `enabled` before
+  requesting authorization. Both bundle processes reached the real
+  UserNotifications listener, but neither produced a prompt, callback, or
+  success marker. Unified logs recorded an invalid `usernoted` connection on
+  macOS 14 and macOS latest. The probe restored the launch-agent override and
+  bounded deletion of the temporary signing material.
+
+## Hosted-runner blocker
+
+- The hosted path has exhausted application-main-thread, AppKit-run-loop,
+  LaunchServices, UI-agent, screen-capture, and locally valid signing
+  hypotheses. The remaining required evidence needs an interactive Mac where
+  Notification Center and `usernoted` are supported session services, plus a
+  release-appropriate Apple signing identity when validating the distributable
+  package.
+- Hosted artifacts cannot substitute for the first grant, explicit denial,
+  Focus/Do Not Disturb, and two-event visual checks required by this stage.
 
 ## Required before completion
 

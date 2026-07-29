@@ -6,7 +6,7 @@
 It turns Codex events that need human attention into native Windows or macOS
 notifications, including events produced by Codex running on a remote server.
 
-> Status: Stages 01-11 are complete: compatibility evidence, architecture
+> Status: Stages 01-12 are complete: compatibility evidence, architecture
 > decisions, the Rust workspace, three-platform quality gates, and the
 > canonical event domain model, layered configuration, and cross-platform path
 > rules are established, together with structured redacted logging and the
@@ -17,11 +17,12 @@ notifications, including events produced by Codex running on a remote server.
 > `emit` paths and read-only capability reporting. The Windows WinRT adapter,
 > policy mapping, diagnostics, and automated contracts are implemented;
 > product-identity Toast delivery and real disabled, Focus Assist, missing
-> identity, and Session 0 states are verified on Windows 10 22H2, while Windows
-> 11 remains unverified. The macOS UserNotifications adapter, bundle contract,
-> authorization diagnostics, native CI, and headless checks are implemented;
-> real interactive notification tests are still pending. SSH has not been
-> implemented yet.
+> identity, and Session 0 states are verified on Windows 10 22H2, and fresh
+> first-use delivery is verified on Windows 11. The macOS UserNotifications
+> adapter, bundle contract, authorization diagnostics, native CI, and headless
+> checks are implemented; hosted runners cannot complete the real interactive
+> authorization, denial, Focus, or display gates. SSH has not been implemented
+> yet.
 
 The implementation sequence and acceptance gates are defined in
 [`stages.md`](stages.md).
@@ -310,10 +311,13 @@ hours suppress popup and audio while retaining notification-center delivery.
 Version 1 emits no actions, launch URI, reply field, command, or remote approval
 control.
 
-The backend validates the product AUMID `LeopardRich.CodexNotifier`, rejects
-Session 0, and distinguishes missing identity, per-application disablement,
-global user disablement, group-policy disablement, API unavailability, and
-delivery rejection. Windows Focus Assist and Do Not Disturb remain
+The backend validates the product AUMID `LeopardRich.CodexNotifier` and its
+installer-owned per-user registry identity, rejects Session 0, and
+distinguishes missing identity, per-application disablement, global user
+disablement, group-policy disablement, API unavailability, and delivery
+rejection. A registered first-use identity may submit its initial Toast before
+Windows has created a notification-settings record. Windows Focus Assist and
+Do Not Disturb remain
 operating-system policy; diagnostics report `system_managed` rather than
 claiming an unsupported active-state probe. The package resource and reversible
 ownership contract is recorded in
@@ -324,7 +328,10 @@ per-user unpackaged-app registration using the product AUMID passed the ignored
 two-event smoke test: WinRT accepted both real Toasts and the Windows
 notification database persisted their exact fixed private payloads. Real
 application-disabled and Focus Assist Priority-only states were exercised and
-restored. Windows 11 smoke testing remains outstanding. See
+restored. On Windows 11 Enterprise build 26200 Arm64, a fresh install-grade
+identity passed the same two-event product smoke without a raw notification or
+pre-existing settings record; Notification Center also rendered the product
+group under Do Not Disturb. See
 [`docs/verification/stage-12.md`](docs/verification/stage-12.md).
 
 ### macOS native notifications
@@ -355,8 +362,12 @@ contract is recorded in
 self-bundles and ad-hoc signs a foreground test application, registers it with
 LaunchServices, starts AppKit on the process main thread, explicitly requests
 authorization through the product backend, and submits both event kinds.
-Hosted macOS sessions did not expose the system permission UI, so real visual
-confirmation on macOS 14 and the latest supported macOS remains unverified; see
+Hosted macOS sessions did not expose the system permission UI even after the
+disabled UI agent was enabled and the bundle used a locally trusted signing
+identity. Both hosts reached UserNotifications, but no callback or prompt was
+produced and Notification Center reported an invalid `usernoted` connection.
+Real authorization, denial, Focus, and visual confirmation on macOS 14 and the
+latest supported macOS therefore remain unverified; see
 [`docs/verification/stage-13.md`](docs/verification/stage-13.md).
 
 ## Security Model
