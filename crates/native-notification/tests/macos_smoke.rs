@@ -116,7 +116,7 @@ mod macos {
                 Urgency::High,
             ))
             .expect("macOS accepted the approval-request notification");
-        thread::sleep(Duration::from_secs(4));
+        thread::sleep(Duration::from_secs(6));
         if let Some(path) = std::env::var_os(RESULT_PATH_ENV) {
             fs::write(path, b"ok").expect("write successful macOS smoke result");
         }

@@ -608,7 +608,7 @@ jobs:
               repeat with candidateProcess in application processes
                   try
                       set processName to name of candidateProcess as text
-                      if processName contains "Notification" or processName is "System Settings" then
+                      if processName is "NotificationCenter" or (processName is "UserNotificationCenter" and screenPressed is not "1") or (processName is "System Settings" and bannerPressed is "1" and (settingsAllowPressed is not "1" or settingsAppPressed is not "1")) then
                           set observations to observations & " process=" & processName & " windows=" & (count windows of candidateProcess)
                           repeat with candidateWindow in windows of candidateProcess
                               set candidateElements to entire contents of candidateWindow
