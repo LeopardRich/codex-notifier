@@ -353,6 +353,33 @@ jobs:
             launchctl print "gui/$uid/com.apple.UserNotificationCenterAgent"
           } >target/macos-session-services.txt 2>&1
 
+      - name: Enable only Notification Center UI agent
+        shell: bash
+        run: |
+          set -euo pipefail
+          uid="$(id -u)"
+          agent='com.apple.notificationcenterui.agent'
+          plist='/System/Library/LaunchAgents/com.apple.notificationcenterui.plist'
+          if launchctl print-disabled "gui/$uid" |
+            grep -q '"com.apple.notificationcenterui.agent" => disabled'; then
+            echo disabled >target/macos-notificationcenterui-original-state.txt
+            launchctl enable "gui/$uid/$agent"
+          else
+            echo enabled >target/macos-notificationcenterui-original-state.txt
+          fi
+          if ! launchctl print "gui/$uid/$agent" >/dev/null 2>&1; then
+            launchctl bootstrap "gui/$uid" "$plist"
+          fi
+          launchctl kickstart -k "gui/$uid/$agent"
+          sleep 3
+          {
+            echo 'Notification Center UI agent after isolated enable:'
+            launchctl print "gui/$uid/$agent"
+            echo 'Notification services after isolated enable:'
+            launchctl print "gui/$uid" | grep -i -C 3 notificationcenterui
+          } >>target/macos-session-services.txt 2>&1
+          launchctl print "gui/$uid/$agent" >/dev/null
+
       - name: Build macOS smoke executable
         run: cargo test -p codex-notifier-native-notification --test macos_smoke --no-run
 
@@ -644,6 +671,17 @@ jobs:
           fi
           if [[ -n "${CODEX_NOTIFIER_MACOS_SIGNING_DIRECTORY:-}" ]]; then
             rm -rf "$CODEX_NOTIFIER_MACOS_SIGNING_DIRECTORY"
+          fi
+          if grep -q '^disabled$' \
+            target/macos-notificationcenterui-original-state.txt 2>/dev/null; then
+            uid="$(id -u)"
+            agent='com.apple.notificationcenterui.agent'
+            launchctl bootout "gui/$uid/$agent" 2>/dev/null
+            launchctl disable "gui/$uid/$agent"
+            {
+              echo 'Notification Center UI override after cleanup:'
+              launchctl print-disabled "gui/$uid"
+            } >>target/macos-session-services.txt 2>&1
           fi
 
       - name: Upload macOS evidence
