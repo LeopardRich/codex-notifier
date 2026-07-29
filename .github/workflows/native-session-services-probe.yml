@@ -1,0 +1,417 @@
+name: Native session services probe
+
+on:
+  push:
+    branches:
+      - platform-probe/native-session-services
+
+permissions:
+  contents: read
+
+jobs:
+  windows-11:
+    name: Windows 11 Arm64 identity index
+    runs-on: windows-11-arm
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Complete hosted Windows first-login UI
+        shell: pwsh
+        run: |
+          New-Item -Path target -ItemType Directory -Force | Out-Null
+          Add-Type -AssemblyName UIAutomationClient
+          Add-Type -AssemblyName UIAutomationTypes
+          Add-Type -AssemblyName System.Drawing
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+
+          public static class ProbeMouse
+          {
+              [DllImport("user32.dll")]
+              public static extern bool SetCursorPos(int x, int y);
+
+              [DllImport("user32.dll")]
+              public static extern void mouse_event(
+                  uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
+
+              public static void Click(int x, int y)
+              {
+                  SetCursorPos(x, y);
+                  mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);
+                  mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);
+              }
+          }
+          '@
+
+          $root = [System.Windows.Automation.AutomationElement]::RootElement
+          $condition = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+            [System.Windows.Automation.ControlType]::Button)
+          $invoked = 0
+          for ($attempt = 0; $attempt -lt 10; $attempt++) {
+            $buttons = $root.FindAll(
+              [System.Windows.Automation.TreeScope]::Descendants,
+              $condition)
+            "Attempt=$attempt" | Add-Content target\windows11-first-login.log
+            @($buttons | ForEach-Object {
+              "Name=$($_.Current.Name) AutomationId=$($_.Current.AutomationId) Enabled=$($_.Current.IsEnabled)"
+            }) | Add-Content target\windows11-first-login.log
+            $candidate = $buttons | Where-Object {
+              $_.Current.IsEnabled -and
+              $_.Current.Name -in @('Next', 'Accept', 'Continue')
+            } | Select-Object -First 1
+            if (-not $candidate) { break }
+            $pattern = [System.Windows.Automation.InvokePattern]$candidate.GetCurrentPattern(
+              [System.Windows.Automation.InvokePattern]::Pattern)
+            $pattern.Invoke()
+            $invoked += 1
+            Start-Sleep -Seconds 2
+          }
+
+          if ($invoked -eq 0) {
+            $screen = [System.Windows.Forms.SystemInformation]::VirtualScreen
+            $x = $screen.Left + [int]($screen.Width * 0.846)
+            $y = $screen.Top + [int]($screen.Height * 0.855)
+            for ($click = 0; $click -lt 2; $click++) {
+              "CoordinateClick=$click X=$x Y=$y" |
+                Add-Content target\windows11-first-login.log
+              [ProbeMouse]::Click($x, $y)
+              Start-Sleep -Seconds 4
+            }
+          }
+
+          if (-not (Get-Process explorer -ErrorAction SilentlyContinue)) {
+            Start-Process explorer.exe
+            Start-Sleep -Seconds 3
+          }
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
+
+      - name: Build Windows smoke executable
+        run: cargo test -p codex-notifier-native-notification --test windows_smoke --no-run
+
+      - name: Exercise indexed install-grade identity
+        id: windows-smoke
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $aumid = 'LeopardRich.CodexNotifier'
+          $identityKey = "HKCU:\Software\Classes\AppUserModelId\$aumid"
+          $programs = [Environment]::GetFolderPath('Programs')
+          $shortcut = Join-Path $programs 'Codex Notifier.lnk'
+          $installDir = Join-Path $env:LOCALAPPDATA 'Programs\Codex Notifier Probe'
+          $installedBinary = Join-Path $installDir 'codex-notifier.exe'
+          $iconPath = Join-Path $installDir 'codex-notifier.png'
+          $arguments = '--exact displays_task_completion_and_approval_request_toasts --ignored --nocapture'
+          $testBinary = Get-ChildItem target\debug\deps\windows_smoke-*.exe |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          if (-not $testBinary) { throw 'Windows smoke executable was not built' }
+
+          $os = Get-CimInstance Win32_OperatingSystem
+          @(
+            "Caption=$($os.Caption)"
+            "Version=$($os.Version)"
+            "Build=$($os.BuildNumber)"
+            "ProcessArchitecture=$([Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture)"
+            "SessionId=$((Get-Process -Id $PID).SessionId)"
+            "Programs=$programs"
+          ) | Set-Content target\windows11-host.txt
+
+          $exitCode = 1
+          try {
+            New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+            Copy-Item -LiteralPath $testBinary.FullName -Destination $installedBinary
+            Add-Type -AssemblyName System.Drawing
+            $icon = New-Object System.Drawing.Bitmap(64, 64)
+            $graphics = [System.Drawing.Graphics]::FromImage($icon)
+            try {
+              $graphics.Clear([System.Drawing.Color]::FromArgb(0, 120, 212))
+              $icon.Save($iconPath, [System.Drawing.Imaging.ImageFormat]::Png)
+            }
+            finally {
+              $graphics.Dispose()
+              $icon.Dispose()
+            }
+
+            & .github\scripts\windows-toast-probe-identity.ps1 `
+              -Mode Create `
+              -ShortcutPath $shortcut `
+              -TargetPath $installedBinary `
+              -TargetArguments $arguments `
+              -IconPath $iconPath
+
+            $indexed = $false
+            for ($attempt = 0; $attempt -lt 60; $attempt++) {
+              $entry = Get-StartApps | Where-Object AppID -eq $aumid
+              if ($entry) {
+                "IndexedBeforeRestart=$($entry.Name):$($entry.AppID)" |
+                  Add-Content target\windows11-identity.txt
+                $indexed = $true
+                break
+              }
+              Start-Sleep -Seconds 1
+            }
+
+            if (-not $indexed) {
+              'Start Apps index missing before Shell restart' |
+                Add-Content target\windows11-identity.txt
+              Get-Process StartMenuExperienceHost -ErrorAction SilentlyContinue |
+                Stop-Process -Force
+              Get-Process explorer -ErrorAction SilentlyContinue |
+                Stop-Process -Force
+              Start-Process explorer.exe
+              for ($attempt = 0; $attempt -lt 60; $attempt++) {
+                $entry = Get-StartApps | Where-Object AppID -eq $aumid
+                if ($entry) {
+                  "IndexedAfterRestart=$($entry.Name):$($entry.AppID)" |
+                    Add-Content target\windows11-identity.txt
+                  $indexed = $true
+                  break
+                }
+                Start-Sleep -Seconds 1
+              }
+            }
+
+            $shell = New-Object -ComObject Shell.Application
+            $shortcutFolder = $shell.Namespace((Split-Path $shortcut))
+            $shortcutItem = $shortcutFolder.ParseName((Split-Path $shortcut -Leaf))
+            $appsFolder = $shell.Namespace('shell:AppsFolder')
+            $appsItem = @($appsFolder.Items()) | Where-Object {
+              $_.ExtendedProperty('System.AppUserModel.ID') -eq $aumid
+            } | Select-Object -First 1
+            @(
+              "ShortcutExists=$(Test-Path -LiteralPath $shortcut)"
+              "ShortcutAppId=$($shortcutItem.ExtendedProperty('System.AppUserModel.ID'))"
+              "RegistryIdentity=$(Test-Path -LiteralPath $identityKey)"
+              "StartAppsIndexed=$indexed"
+              "AppsFolderItem=$($appsItem.Name)"
+              "AppsFolderPath=$($appsItem.Path)"
+            ) | Add-Content target\windows11-identity.txt
+
+            $process = Start-Process -FilePath $shortcut -PassThru -Wait
+            $exitCode = $process.ExitCode
+            "ShortcutExitCode=$exitCode" | Set-Content target\windows11-smoke.log
+            if ($exitCode -ne 0) {
+              $output = & $installedBinary `
+                --exact displays_task_completion_and_approval_request_toasts `
+                --ignored `
+                --nocapture 2>&1
+              $directCode = $LASTEXITCODE
+              $output | Add-Content target\windows11-smoke.log
+              "DirectExitCode=$directCode" | Add-Content target\windows11-smoke.log
+              $exitCode = $directCode
+            }
+
+            Start-Sleep -Milliseconds 500
+            Add-Type -AssemblyName System.Windows.Forms
+            $screen = [System.Windows.Forms.SystemInformation]::VirtualScreen
+            $bitmap = New-Object System.Drawing.Bitmap($screen.Width, $screen.Height)
+            $screenGraphics = [System.Drawing.Graphics]::FromImage($bitmap)
+            try {
+              $screenGraphics.CopyFromScreen($screen.Left, $screen.Top, 0, 0, $bitmap.Size)
+              $bitmap.Save('target\windows11-screen.png', [System.Drawing.Imaging.ImageFormat]::Png)
+            }
+            finally {
+              $screenGraphics.Dispose()
+              $bitmap.Dispose()
+            }
+
+            $database = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Notifications\wpndatabase.db'
+            $sqlite = Get-Command sqlite3 -ErrorAction SilentlyContinue
+            if ($sqlite -and (Test-Path -LiteralPath $database)) {
+              & $sqlite.Source -readonly -header -column $database `
+                "SELECT n.Id, n.ArrivalTime, CAST(n.Payload AS TEXT) AS Payload FROM Notification n JOIN NotificationHandler h ON h.RecordId=n.HandlerId WHERE h.PrimaryId='$aumid' ORDER BY n.ArrivalTime DESC LIMIT 5;" |
+                Set-Content target\windows11-notifications.txt
+            }
+          }
+          finally {
+            & .github\scripts\windows-toast-probe-identity.ps1 `
+              -Mode Remove `
+              -ShortcutPath $shortcut
+            if (Test-Path -LiteralPath $installDir) {
+              Remove-Item -LiteralPath $installDir -Recurse -Force
+            }
+          }
+          exit $exitCode
+
+      - name: Upload Windows evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-11-session-services
+          path: target/windows11-*
+          if-no-files-found: error
+
+      - name: Require Windows smoke success
+        if: steps.windows-smoke.outcome != 'success'
+        run: exit 1
+
+  macos:
+    name: ${{ matrix.name }} notification UI service
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS 14
+            os: macos-14
+          - name: macOS latest
+            os: macos-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
+
+      - name: Start notification UI services
+        shell: bash
+        run: |
+          set +e
+          mkdir -p target
+          uid="$(id -u)"
+          {
+            sw_vers
+            uname -m
+            id
+            stat -f 'ConsoleUser=%Su ConsoleUid=%u' /dev/console
+            echo 'Processes before:'
+            pgrep -lf 'WindowServer|loginwindow|NotificationCenter|UserNotificationCenter|usernotificationsd|usernoted'
+            echo 'Notification launch items:'
+          } >target/macos-session-services.txt 2>&1
+
+          for directory in /System/Library/LaunchAgents /System/Library/LaunchDaemons; do
+            for plist in "$directory"/*[Nn]otification*.plist "$directory"/*[Uu]ser[Nn]ot*.plist; do
+              [[ -e "$plist" ]] || continue
+              label=$(/usr/libexec/PlistBuddy -c 'Print :Label' "$plist" 2>/dev/null)
+              [[ -n "$label" ]] || continue
+              {
+                echo "plist=$plist"
+                echo "label=$label"
+                launchctl print "gui/$uid/$label"
+              } >>target/macos-session-services.txt 2>&1
+              if ! launchctl print "gui/$uid/$label" >/dev/null 2>&1; then
+                launchctl bootstrap "gui/$uid" "$plist" \
+                  >>target/macos-session-services.txt 2>&1
+              fi
+              launchctl kickstart -k "gui/$uid/$label" \
+                >>target/macos-session-services.txt 2>&1
+            done
+          done
+
+          for app in \
+            /System/Library/CoreServices/NotificationCenter.app \
+            /System/Library/CoreServices/UserNotificationCenter.app; do
+            if [[ -d "$app" ]]; then
+              echo "opening=$app" >>target/macos-session-services.txt
+              open -g "$app" >>target/macos-session-services.txt 2>&1
+            fi
+          done
+          sleep 5
+          {
+            echo 'Processes after:'
+            pgrep -lf 'WindowServer|loginwindow|NotificationCenter|UserNotificationCenter|usernotificationsd|usernoted'
+            echo 'GUI notification services after:'
+            launchctl print "gui/$uid" | grep -i -C 2 notification
+          } >>target/macos-session-services.txt 2>&1
+
+      - name: Build macOS smoke executable
+        run: cargo test -p codex-notifier-native-notification --test macos_smoke --no-run
+
+      - name: Exercise authorization and delivery
+        id: macos-smoke
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          CODEX_NOTIFIER_MACOS_SMOKE_ROOT=/Applications \
+            cargo test -p codex-notifier-native-notification \
+            --test macos_smoke \
+            displays_task_completion_and_approval_request_notifications \
+            -- --ignored --exact --nocapture \
+            >target/macos-smoke.log 2>&1 &
+          smoke_pid=$!
+
+          sleep 2
+          screencapture -x target/macos-before.png \
+            2>target/macos-before-error.txt
+          clicked=''
+          for attempt in $(seq 1 80); do
+            CODEX_PROBE_SCREENSHOT="$PWD/target/macos-permission-prompt.png" \
+              osascript >target/macos-ui-current.txt 2>&1 <<'APPLESCRIPT'
+          tell application "System Events"
+              repeat with candidateProcess in every application process
+                  try
+                      repeat with candidateWindow in windows of candidateProcess
+                          set candidateElements to entire contents of candidateWindow
+                          repeat with candidateElement in candidateElements
+                              try
+                                  if role of candidateElement is "AXButton" and name of candidateElement is "Allow" then
+                                      set screenshotPath to system attribute "CODEX_PROBE_SCREENSHOT"
+                                      do shell script "/usr/sbin/screencapture -x " & quoted form of screenshotPath
+                                      click candidateElement
+                                      return "clicked=" & name of candidateProcess
+                                  end if
+                              end try
+                          end repeat
+                      end repeat
+                  end try
+              end repeat
+              return "Allow button not found"
+          end tell
+          APPLESCRIPT
+            cat target/macos-ui-current.txt >target/macos-ui.txt
+            if grep -q '^clicked=' target/macos-ui-current.txt; then
+              clicked=1
+              break
+            fi
+            if ! kill -0 "$smoke_pid" 2>/dev/null; then
+              break
+            fi
+            sleep 0.5
+          done
+
+          result=''
+          for attempt in $(seq 1 80); do
+            if ! kill -0 "$smoke_pid" 2>/dev/null; then
+              wait "$smoke_pid"
+              result=$?
+              break
+            fi
+            sleep 0.5
+          done
+          screencapture -x target/macos-after.png \
+            2>target/macos-after-error.txt
+          if [[ -z "$result" ]]; then
+            echo "Smoke timed out clicked=$clicked" >>target/macos-smoke.log
+            kill "$smoke_pid" 2>/dev/null
+            pkill -f codex-notifier-macos-smoke 2>/dev/null
+            wait "$smoke_pid" 2>/dev/null
+            result=124
+          fi
+
+          log show --last 4m --style compact \
+            --predicate 'process == "codex-notifier-macos-smoke" OR process == "NotificationCenter" OR process == "UserNotificationCenter" OR subsystem CONTAINS "UserNotifications"' \
+            >target/macos-unified.log 2>&1 || true
+          cat target/macos-ui.txt
+          cat target/macos-smoke.log
+          exit "$result"
+
+      - name: Upload macOS evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.os }}-session-services
+          path: target/macos-*
+          if-no-files-found: error
+
+      - name: Require macOS smoke success
+        if: steps.macos-smoke.outcome != 'success'
+        run: exit 1
