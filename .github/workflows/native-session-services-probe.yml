@@ -869,7 +869,8 @@ jobs:
               delay 2
               set observations to observations & " pressed=" & pressedControlCenter & " windows=" & (count windows of controlCenterProcess)
               repeat with candidateWindow in windows of controlCenterProcess
-                  repeat with candidateElement in entire contents of candidateWindow
+                  set candidateElements to entire contents of candidateWindow
+                  repeat with candidateElement in candidateElements
                       try
                           set elementRole to role of candidateElement as text
                       on error
