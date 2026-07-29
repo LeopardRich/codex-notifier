@@ -7,7 +7,7 @@ use codex_notifier_core::{
     CanonicalEvent, EventId, EventKind, EventSource, Extensions, Presentation, Privacy, Routing,
     Urgency,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
@@ -132,6 +132,7 @@ impl TaskCompletedAdapter {
 struct StopHookV0144 {
     session_id: String,
     #[allow(dead_code)]
+    #[serde(deserialize_with = "deserialize_optional_string")]
     transcript_path: Option<String>,
     cwd: String,
     hook_event_name: String,
@@ -141,6 +142,7 @@ struct StopHookV0144 {
     #[allow(dead_code)]
     stop_hook_active: bool,
     #[allow(dead_code)]
+    #[serde(deserialize_with = "deserialize_optional_string")]
     last_assistant_message: Option<String>,
 }
 
@@ -174,6 +176,13 @@ enum PermissionMode {
     DontAsk,
     #[serde(rename = "bypassPermissions")]
     BypassPermissions,
+}
+
+fn deserialize_optional_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer)
 }
 
 fn valid_source_id(value: &str) -> bool {
