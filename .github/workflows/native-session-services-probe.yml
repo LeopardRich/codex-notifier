@@ -389,23 +389,20 @@ jobs:
           for attempt in $(seq 1 40); do
             osascript >target/macos-screen-permission.txt 2>&1 <<'APPLESCRIPT'
           tell application "System Events"
-              repeat with candidateProcess in application processes
-                  try
-                      set processName to name of candidateProcess as text
-                      if processName contains "Notification" then
-                          repeat with candidateWindow in windows of candidateProcess
-                              repeat with candidateElement in entire contents of candidateWindow
-                                  try
-                                      if role of candidateElement is "AXButton" and name of candidateElement is "Allow" then
-                                          perform action "AXPress" of candidateElement
-                                          return "pressed screen-capture Allow in " & processName
-                                      end if
-                                  end try
-                              end repeat
+              try
+                  tell process "UserNotificationCenter"
+                      repeat with candidateWindow in windows
+                          repeat with candidateElement in entire contents of candidateWindow
+                              try
+                                  if role of candidateElement is "AXButton" and name of candidateElement is "Allow" then
+                                      perform action "AXPress" of candidateElement
+                                      return "pressed screen-capture Allow"
+                                  end if
+                              end try
                           end repeat
-                      end if
-                  end try
-              end repeat
+                      end repeat
+                  end tell
+              end try
               return "screen-capture Allow not found"
           end tell
           APPLESCRIPT
@@ -621,7 +618,13 @@ jobs:
                                           if role of candidateElement is "AXButton" and name of candidateElement is "Allow" then
                                               set screenshotPath to system attribute "CODEX_PROBE_SCREENSHOT"
                                               do shell script "/usr/sbin/screencapture -x " & quoted form of screenshotPath
-                                              perform action "AXPress" of candidateElement
+                                              try
+                                                  perform action "AXPress" of candidateElement
+                                              on error
+                                                  set buttonPosition to position of candidateElement
+                                                  set buttonSize to size of candidateElement
+                                                  click at {(item 1 of buttonPosition) + ((item 1 of buttonSize) div 2), (item 2 of buttonPosition) + ((item 2 of buttonSize) div 2)}
+                                              end try
                                               return "clicked=notification process=" & processName & " text=" & windowText
                                           end if
                                       end try
@@ -638,19 +641,12 @@ jobs:
                                           if elementText contains "Codex Notifier" or elementText contains "Notifications may include" then
                                               set screenshotPath to system attribute "CODEX_PROBE_SCREENSHOT"
                                               do shell script "/usr/sbin/screencapture -x " & quoted form of screenshotPath
-                                              set pressTarget to candidateElement
-                                              repeat 4 times
-                                                  try
-                                                      perform action "AXPress" of pressTarget
-                                                      return "pressed=banner process=" & processName & " element=" & elementText
-                                                  on error
-                                                      try
-                                                          set pressTarget to parent of pressTarget
-                                                      on error
-                                                          exit repeat
-                                                      end try
-                                                  end try
-                                              end repeat
+                                              set elementPosition to position of candidateElement
+                                              set elementSize to size of candidateElement
+                                              set clickX to (item 1 of elementPosition) + ((item 1 of elementSize) div 2)
+                                              set clickY to (item 2 of elementPosition) + ((item 2 of elementSize) div 2)
+                                              click at {clickX, clickY}
+                                              return "pressed=banner-coordinate process=" & processName & " x=" & clickX & " y=" & clickY & " element=" & elementText
                                           end if
                                       end try
                                   end repeat
