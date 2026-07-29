@@ -1,0 +1,17 @@
+[Unit]
+Description=Codex Notifier relay agent
+Documentation=https://github.com/LeopardRich/codex-notifier
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart="@EXECUTABLE@" agent
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+
+[Install]
+WantedBy=default.target

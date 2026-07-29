@@ -4,6 +4,12 @@ Stage 13 freezes the application identity and resources that the Stage 14
 installer and Stage 19 release package must own. A bare CLI executable is not a
 valid notification identity and must never impersonate Finder or another app.
 
+Stage 19 builds one Intel/Apple-silicon universal app archive with release
+metadata, SPDX SBOM, license notices, and checksums. Push builds use an ad-hoc
+verification signature only. Protected tag builds require Developer ID,
+`notarytool`, stapling, and Gatekeeper acceptance before publication; see
+[`../../docs/release.md`](../../docs/release.md).
+
 ## Application bundle
 
 - Bundle path: `Codex Notifier.app`

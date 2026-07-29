@@ -17,6 +17,8 @@ behavior remains documented in both root README files.
   delivery-aware local/remote self-tests, and stable exit codes.
 - [`reliability.md`](reliability.md): Stage 18 crash, duplicate, fault, load,
   and four-path platform evidence contract.
+- [`release.md`](release.md): archives, protected signing/notarization,
+  checksums, SBOM/licenses, verification, and package lifecycle.
 - [`decisions/`](decisions/): accepted architecture decisions.
 - [`verification/`](verification/): stage evidence and explicitly unverified
   platform checks.

@@ -398,6 +398,7 @@ Windows 上的用户配置与状态遵循 `%APPDATA%` 和 `%LOCALAPPDATA%`，mac
 
 | 命令 | 可用性 | 用途 |
 | --- | --- | --- |
+| `--version` | 已实现 | 输出用于归档与升级校验的 package 版本。 |
 | `emit task-completed` | 已实现 | 面向 Codex、接收已验证 `Stop` 载荷的有界本地事件入口。 |
 | `emit approval-requested` | 已实现 | 接收已验证 app-server 命令审批请求的有界本地事件入口。 |
 | `doctor codex` | 已实现 | 只读报告版本/界面能力与安装选择。 |
@@ -653,6 +654,8 @@ CI 在 Windows、macOS 和 Linux relay runner 上执行相同质量门禁。
   [`docs/reliability.md`](docs/reliability.md)；无法执行的真实平台路径保持“未验证”，
   不从组件测试推断平台结论。
 - 安全测试覆盖超大输入、异常 JSON、Shell 元字符、重复事件 ID、权限边界和日志脱敏。
+- 发布 CI 会阻断依赖漏洞、不允许的许可证/来源、归档版本或校验和不一致、非法 package
+  布局，以及缺失的生产签名或公证；详见 [`docs/release.md`](docs/release.md)。
 
 ## 发布路线
 

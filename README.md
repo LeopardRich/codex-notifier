@@ -477,6 +477,7 @@ diagnostics are implemented:
 
 | Command | Availability | Purpose |
 | --- | --- | --- |
+| `--version` | Implemented | Print the package version used by archive and upgrade verification. |
 | `emit task-completed` | Implemented | Codex-facing, bounded local ingestion for the verified `Stop` payload. |
 | `emit approval-requested` | Implemented | Bounded local ingestion for a verified app-server command-approval request. |
 | `doctor codex` | Implemented | Read-only version/interface capability and installation reporting. |
@@ -772,6 +773,9 @@ CI runs the same quality gates on Windows, macOS, and a Linux relay runner.
   stay unverified rather than being inferred from component tests.
 - Security tests cover oversized input, malformed JSON, shell metacharacters,
   replayed event IDs, permission boundaries, and log redaction.
+- Release CI blocks advisories, disallowed dependency licenses/sources,
+  mismatched archive versions/checksums, invalid package layouts, and missing
+  production signing or notarization; see [`docs/release.md`](docs/release.md).
 
 ## Release Plan
 

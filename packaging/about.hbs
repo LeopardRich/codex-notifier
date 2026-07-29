@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>codex-notifier third-party licenses</title>
+  <style>
+    body { font-family: sans-serif; margin: 2rem auto; max-width: 72rem; padding: 0 1rem; }
+    table { border-collapse: collapse; width: 100%; }
+    td, th { border-bottom: 1px solid #bbb; padding: 0.4rem; text-align: left; }
+    pre { max-height: 24rem; overflow: auto; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>codex-notifier third-party licenses</h1>
+  <p>Generated from the locked Cargo dependency graph by cargo-about.</p>
+  <table>
+    <thead><tr><th>Package</th><th>Version</th><th>License</th></tr></thead>
+    <tbody>
+    {{#each crates}}
+      <tr>
+        <td><a href="{{#if package.repository}}{{package.repository}}{{else}}https://crates.io/crates/{{package.name}}{{/if}}">{{package.name}}</a></td>
+        <td>{{package.version}}</td>
+        <td>{{license}}</td>
+      </tr>
+    {{/each}}
+    </tbody>
+  </table>
+  {{#each overview}}
+    <h2 id="{{id}}">{{name}}</h2>
+    <pre>{{text}}</pre>
+  {{/each}}
+</body>
+</html>

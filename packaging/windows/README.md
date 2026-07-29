@@ -3,6 +3,12 @@
 Stage 12 freezes the native notification identity and the resources that the
 Stage 14 installer and Stage 19 package must own.
 
+Stage 19 produces `codex-notifier-vVERSION-windows-x86_64.zip` with the signed
+executable, release metadata, SPDX SBOM, license notices, and sidecar/aggregate
+SHA-256 checksums. Unsigned push-build archives are explicitly verification
+only. Protected tag jobs require Authenticode validation and the configured
+signer thumbprint before publication; see [`../../docs/release.md`](../../docs/release.md).
+
 ## Application identity
 
 - AppUserModelID: `LeopardRich.CodexNotifier`

@@ -104,3 +104,427 @@ jobs:
       - name: Verify macOS no-Aqua diagnostic
         if: startsWith(matrix.target, 'macos-')
         run: cargo test -p codex-notifier-native-notification --test macos_smoke reports_real_no_gui_session -- --ignored --exact --nocapture
+
+  supply-chain:
+    name: dependency-audit-sbom-licenses
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
+
+      - name: Cache pinned release tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-deny
+            ~/.cargo/bin/cargo-about
+            ~/.cargo/bin/cargo-sbom
+          key: release-tools-deny-0.20.2-about-0.9.1-sbom-0.10.0
+
+      - name: Install pinned release tools
+        run: |
+          command -v cargo-deny >/dev/null || cargo install --locked cargo-deny --version 0.20.2
+          command -v cargo-about >/dev/null || cargo install --locked --features cli cargo-about --version 0.9.1
+          command -v cargo-sbom >/dev/null || cargo install --locked cargo-sbom --version 0.10.0
+
+      - name: Audit advisories, licenses, bans, and sources
+        run: |
+          cargo deny check advisories licenses bans sources
+          git diff --exit-code -- Cargo.lock
+
+      - name: Generate SPDX SBOM and license notices
+        run: |
+          mkdir release-supply-chain
+          cargo sbom --output-format spdx_json_2_3 > release-supply-chain/codex-notifier.spdx.json
+          cargo about generate --locked --workspace --fail --config packaging/about.toml --output-file release-supply-chain/THIRD-PARTY-LICENSES.html packaging/about.hbs
+          git diff --exit-code -- Cargo.lock
+          jq -e '.SPDXID == "SPDXRef-DOCUMENT" and (.packages | length > 0)' release-supply-chain/codex-notifier.spdx.json >/dev/null
+          test -s release-supply-chain/THIRD-PARTY-LICENSES.html
+
+      - name: Upload supply-chain documents
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-supply-chain
+          path: release-supply-chain/*
+          if-no-files-found: error
+
+  package-windows:
+    name: package-windows-x86_64
+    needs: supply-chain
+    runs-on: windows-latest
+    environment:
+      name: ${{ startsWith(github.ref, 'refs/tags/v') && 'release' || 'release-verification' }}
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.88.0 --profile minimal
+
+      - name: Download supply-chain documents
+        uses: actions/download-artifact@v4
+        with:
+          name: release-supply-chain
+          path: release-supply-chain
+
+      - name: Build locked release executable
+        run: cargo build --release --locked -p codex-notifier
+
+      - name: Sign Windows release executable
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
+          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
+          WINDOWS_SIGNING_CERT_SHA1: ${{ vars.WINDOWS_SIGNING_CERT_SHA1 }}
+        run: |
+          if (-not $env:WINDOWS_PFX_BASE64 -or -not $env:WINDOWS_PFX_PASSWORD -or -not $env:WINDOWS_SIGNING_CERT_SHA1) {
+            throw 'protected Windows signing bindings are required for a release tag'
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP 'codex-notifier-signing.pfx'
+          try {
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_PFX_BASE64))
+            $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -Filter signtool.exe |
+              Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
+              Sort-Object FullName -Descending |
+              Select-Object -First 1
+            if (-not $signtool) { throw 'signtool.exe is unavailable' }
+            & $signtool.FullName sign /fd SHA256 /f $pfx /p $env:WINDOWS_PFX_PASSWORD /tr http://timestamp.digicert.com /td SHA256 target\release\codex-notifier.exe
+            if ($LASTEXITCODE -ne 0) { throw 'Windows signing failed' }
+            & $signtool.FullName verify /pa /v target\release\codex-notifier.exe
+            if ($LASTEXITCODE -ne 0) { throw 'Windows signature verification failed' }
+          }
+          finally {
+            Remove-Item -LiteralPath $pfx -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Build and verify Windows archive
+        shell: pwsh
+        run: |
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
+          $mode = if ('${{ startsWith(github.ref, 'refs/tags/v') }}' -eq 'true') { 'production' } else { 'unsigned-verification' }
+          .\packaging\scripts\package-windows.ps1 `
+            -Binary target\release\codex-notifier.exe `
+            -OutputDirectory release `
+            -Version $version `
+            -Commit '${{ github.sha }}' `
+            -LicenseNotices release-supply-chain\THIRD-PARTY-LICENSES.html `
+            -Sbom release-supply-chain\codex-notifier.spdx.json `
+            -SignatureMode $mode `
+            -ExpectedSignerThumbprint '${{ vars.WINDOWS_SIGNING_CERT_SHA1 }}'
+          .\packaging\scripts\verify-release.ps1 `
+            -Archive "release\codex-notifier-v$version-windows-x86_64.zip" `
+            -Package windows-x86_64 `
+            -Version $version `
+            -Commit '${{ github.sha }}' `
+            -SignatureMode $mode
+
+      - name: Exercise packaged Windows install, reinstall, status, and uninstall
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        shell: pwsh
+        run: |
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
+          $root = Join-Path $env:RUNNER_TEMP 'codex-notifier-package-lifecycle'
+          Expand-Archive "release\codex-notifier-v$version-windows-x86_64.zip" -DestinationPath $root
+          $exe = Join-Path $root "codex-notifier-v$version-windows-x86_64\codex-notifier.exe"
+          try {
+            & $exe install --codex-version 0.144.5
+            if ($LASTEXITCODE -ne 0) { throw 'packaged Windows install failed' }
+            & $exe install --codex-version 0.144.5
+            if ($LASTEXITCODE -ne 0) { throw 'packaged Windows reinstall failed' }
+            $statusText = & $exe status --format json
+            $status = $statusText | ConvertFrom-Json
+            if (-not $status.installed -or -not $status.startup_registered) { throw 'packaged Windows status lost owned resources' }
+          }
+          finally {
+            & $exe uninstall
+          }
+          $installed = Join-Path $env:LOCALAPPDATA 'Programs\Codex Notifier'
+          if (Test-Path -LiteralPath $installed) { throw 'packaged Windows uninstall left the install root' }
+
+      - name: Upload Windows archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows-x86_64
+          path: release/*
+          if-no-files-found: error
+
+  package-macos:
+    name: package-macos-universal
+    needs: supply-chain
+    runs-on: macos-14
+    environment:
+      name: ${{ startsWith(github.ref, 'refs/tags/v') && 'release' || 'release-verification' }}
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain and Apple targets
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup target add x86_64-apple-darwin aarch64-apple-darwin --toolchain 1.88.0
+
+      - name: Download supply-chain documents
+        uses: actions/download-artifact@v4
+        with:
+          name: release-supply-chain
+          path: release-supply-chain
+
+      - name: Build universal executable
+        run: |
+          cargo build --release --locked -p codex-notifier --target x86_64-apple-darwin
+          cargo build --release --locked -p codex-notifier --target aarch64-apple-darwin
+          mkdir universal
+          lipo -create \
+            target/x86_64-apple-darwin/release/codex-notifier \
+            target/aarch64-apple-darwin/release/codex-notifier \
+            -output universal/codex-notifier
+          lipo -verify_arch x86_64 arm64 universal/codex-notifier
+
+      - name: Import protected Apple release identity
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_DEVELOPER_ID_APPLICATION: ${{ vars.APPLE_DEVELOPER_ID_APPLICATION }}
+        run: |
+          test -n "$APPLE_CERTIFICATE_P12_BASE64"
+          test -n "$APPLE_CERTIFICATE_PASSWORD"
+          test -n "$APPLE_DEVELOPER_ID_APPLICATION"
+          keychain="$RUNNER_TEMP/codex-notifier-signing.keychain-db"
+          certificate="$RUNNER_TEMP/codex-notifier-signing.p12"
+          password="$(openssl rand -hex 24)"
+          printf '%s' "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > "$certificate"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$certificate" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          rm -f "$certificate"
+
+      - name: Build and verify macOS archive
+        env:
+          APPLE_DEVELOPER_ID_APPLICATION: ${{ vars.APPLE_DEVELOPER_ID_APPLICATION }}
+          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER }}
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          identity=-
+          mode=ad-hoc-verification
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            test -n "$APPLE_DEVELOPER_ID_APPLICATION"
+            test -n "$APPLE_NOTARY_KEY_BASE64"
+            test -n "$APPLE_NOTARY_KEY_ID"
+            test -n "$APPLE_NOTARY_ISSUER"
+            identity="$APPLE_DEVELOPER_ID_APPLICATION"
+            mode=production
+            export APPLE_NOTARY_KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
+            printf '%s' "$APPLE_NOTARY_KEY_BASE64" | base64 --decode > "$APPLE_NOTARY_KEY_PATH"
+          fi
+          bash packaging/scripts/package-macos.sh \
+            universal/codex-notifier release "$version" "$GITHUB_SHA" \
+            release-supply-chain/THIRD-PARTY-LICENSES.html \
+            release-supply-chain/codex-notifier.spdx.json "$identity"
+          pwsh packaging/scripts/verify-release.ps1 \
+            -Archive "release/codex-notifier-v$version-macos-universal.zip" \
+            -Package macos-universal -Version "$version" -Commit "$GITHUB_SHA" -SignatureMode "$mode"
+          rm -f "${APPLE_NOTARY_KEY_PATH:-}"
+
+      - name: Remove Apple signing and notarization material
+        if: always() && startsWith(github.ref, 'refs/tags/v')
+        run: |
+          security list-keychains -d user -s login.keychain-db || true
+          security delete-keychain "$RUNNER_TEMP/codex-notifier-signing.keychain-db" || true
+          rm -f \
+            "$RUNNER_TEMP/codex-notifier-signing.p12" \
+            "$RUNNER_TEMP/AuthKey.p8"
+
+      - name: Exercise packaged macOS install, reinstall, status, and uninstall
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          root="$RUNNER_TEMP/codex-notifier-package-lifecycle"
+          mkdir -p "$root"
+          ditto -x -k "release/codex-notifier-v$version-macos-universal.zip" "$root"
+          executable="$root/Codex Notifier.app/Contents/MacOS/codex-notifier"
+          cleanup() { "$executable" uninstall >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          "$executable" install --codex-version 0.144.5
+          "$executable" install --codex-version 0.144.5
+          set +e
+          status_json=$("$executable" status --format json)
+          set -e
+          printf '%s' "$status_json" | jq -e '.installed == true and .startup_registered == true' >/dev/null
+          "$executable" uninstall
+          test ! -d "$HOME/Applications/Codex Notifier.app"
+
+      - name: Upload macOS archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-macos-universal
+          path: release/*
+          if-no-files-found: error
+
+  package-linux:
+    name: package-linux-${{ matrix.arch }}
+    needs: supply-chain
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            target: x86_64-unknown-linux-gnu
+          - arch: aarch64
+            target: aarch64-unknown-linux-gnu
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install pinned Rust target
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup target add "${{ matrix.target }}" --toolchain 1.88.0
+
+      - name: Install AArch64 linker
+        if: matrix.arch == 'aarch64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gcc-aarch64-linux-gnu
+
+      - name: Download supply-chain documents
+        uses: actions/download-artifact@v4
+        with:
+          name: release-supply-chain
+          path: release-supply-chain
+
+      - name: Build locked relay executable
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: cargo build --release --locked -p codex-notifier --target "${{ matrix.target }}"
+
+      - name: Build and verify Linux archive
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          bash packaging/scripts/package-linux.sh \
+            "target/${{ matrix.target }}/release/codex-notifier" release "$version" "$GITHUB_SHA" "${{ matrix.target }}" \
+            release-supply-chain/THIRD-PARTY-LICENSES.html \
+            release-supply-chain/codex-notifier.spdx.json
+          pwsh packaging/scripts/verify-release.ps1 \
+            -Archive "release/codex-notifier-v$version-linux-${{ matrix.arch }}.tar.gz" \
+            -Package "linux-${{ matrix.arch }}" -Version "$version" -Commit "$GITHUB_SHA" \
+            -SignatureMode checksums-and-provenance
+
+      - name: Exercise packaged Linux relay install and uninstall
+        if: matrix.arch == 'x86_64'
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          root="$RUNNER_TEMP/codex-notifier-package-lifecycle"
+          mkdir -p "$root/archive" "$root/state/codex-notifier"
+          tar -xzf "release/codex-notifier-v$version-linux-x86_64.tar.gz" -C "$root/archive"
+          package="$root/archive/codex-notifier-v$version-linux-x86_64"
+          touch "$root/state/codex-notifier/preserve-me"
+          export HOME="$root/home"
+          export CODEX_NOTIFIER_PREFIX="$root/prefix"
+          export XDG_CONFIG_HOME="$root/config"
+          export XDG_STATE_HOME="$root/state"
+          mkdir -p "$HOME"
+          "$package/install.sh" --no-enable
+          "$root/prefix/bin/codex-notifier" --version | grep -Fx "codex-notifier $version"
+          "$root/prefix/bin/codex-notifier" doctor codex --codex-version 0.144.5 --interface cli-hook >/dev/null
+          "$package/uninstall.sh" --no-disable
+          test ! -e "$root/prefix/bin/codex-notifier"
+          test -f "$root/state/codex-notifier/preserve-me"
+
+      - name: Upload Linux archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-${{ matrix.arch }}
+          path: release/*
+          if-no-files-found: error
+
+  release-bundle:
+    name: verify-release-bundle
+    needs: [supply-chain, package-windows, package-macos, package-linux]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Download release inputs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release
+          merge-multiple: true
+
+      - name: Verify sidecars and aggregate release checksums
+        run: |
+          cd release
+          for sidecar in *.sha256; do sha256sum -c "$sidecar"; done
+          cp ../packaging/RELEASE-NOTES.md .
+          sha256sum \
+            codex-notifier-v*.zip \
+            codex-notifier-v*.tar.gz \
+            codex-notifier.spdx.json \
+            THIRD-PARTY-LICENSES.html \
+            RELEASE-NOTES.md > SHA256SUMS
+          sha256sum -c SHA256SUMS
+          test "$(find . -maxdepth 1 -name 'codex-notifier-v*.zip' | wc -l)" -eq 2
+          test "$(find . -maxdepth 1 -name 'codex-notifier-v*.tar.gz' | wc -l)" -eq 2
+
+      - name: Upload complete release bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-notifier-release-bundle
+          path: release/*
+          if-no-files-found: error
+
+  publish-release:
+    name: attest-and-publish-release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: release-bundle
+    runs-on: ubuntu-22.04
+    environment:
+      name: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Download verified release bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: codex-notifier-release-bundle
+          path: release
+
+      - name: Verify tag matches workspace version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          test "$GITHUB_REF_NAME" = "v$version"
+
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            release/codex-notifier-v*.zip
+            release/codex-notifier-v*.tar.gz
+            release/SHA256SUMS
+            release/codex-notifier.spdx.json
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release/* --verify-tag --title "codex-notifier $GITHUB_REF_NAME" --notes-file release/RELEASE-NOTES.md

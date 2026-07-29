@@ -83,6 +83,7 @@ struct TestCommand {
 }
 
 enum Command {
+    Version,
     Emit(EmitCommand),
     Doctor(DoctorCommand),
     Receive,
@@ -141,6 +142,10 @@ async fn main() {
 
 async fn run() -> Result<i32, CommandError> {
     match parse_command(std::env::args().skip(1))? {
+        Command::Version => {
+            println!("codex-notifier {}", env!("CARGO_PKG_VERSION"));
+            Ok(0)
+        }
         Command::Emit(command) => {
             run_emit(command).await?;
             Ok(0)
@@ -433,6 +438,7 @@ fn ssh_directory() -> Result<PathBuf, CommandError> {
 
 fn parse_command(mut arguments: impl Iterator<Item = String>) -> Result<Command, CommandError> {
     match arguments.next().as_deref() {
+        Some("--version") if arguments.next().is_none() => Ok(Command::Version),
         Some("emit") => parse_emit(arguments).map(Command::Emit),
         Some("doctor") => parse_doctor(arguments).map(Command::Doctor),
         Some("receive") if arguments.next().is_none() => Ok(Command::Receive),
@@ -696,6 +702,14 @@ mod tests {
 
     #[test]
     fn stage_15_commands_reject_trailing_and_duplicate_arguments() {
+        assert!(matches!(
+            parse_command(arguments(&["--version"])),
+            Ok(Command::Version)
+        ));
+        assert!(matches!(
+            parse_command(arguments(&["--version", "extra"])),
+            Err(CommandError::Arguments)
+        ));
         assert!(matches!(
             parse_command(arguments(&["agent"])),
             Ok(Command::Agent)
