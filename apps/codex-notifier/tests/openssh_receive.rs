@@ -2,6 +2,7 @@
 
 #![cfg(target_os = "linux")]
 
+use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
@@ -119,7 +120,7 @@ fn event(label: &str) -> CanonicalEvent {
         )
         .expect("presentation"),
         None,
-        Extensions::new(Default::default()).expect("extensions"),
+        Extensions::new(BTreeMap::new()).expect("extensions"),
         now,
     )
     .expect("event")
@@ -239,6 +240,7 @@ fn create_temp_root() -> TempDir {
         .expect("temporary OpenSSH root")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_sshd_config(
     path: &Path,
     port: u16,
@@ -262,6 +264,7 @@ fn write_sshd_config(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires sudo and the system OpenSSH server"]
+#[allow(clippy::too_many_lines)]
 async fn real_forced_openssh_session_enforces_the_receive_boundary() {
     assert_eq!(
         std::env::var("CODEX_NOTIFIER_OPENSSH_TEST").as_deref(),
