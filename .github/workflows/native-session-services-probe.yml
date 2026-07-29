@@ -328,7 +328,7 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.88.0 --profile minimal
 
-      - name: Start notification UI services
+      - name: Record untouched notification session
         shell: bash
         run: |
           set +e
@@ -339,92 +339,19 @@ jobs:
             uname -m
             id
             stat -f 'ConsoleUser=%Su ConsoleUid=%u' /dev/console
-            echo 'Processes before:'
+            echo 'Processes at clean start:'
             pgrep -lf 'WindowServer|loginwindow|NotificationCenter|UserNotificationCenter|usernotificationsd|usernoted'
-            echo 'Notification launch items:'
-          } >target/macos-session-services.txt 2>&1
-
-          if launchctl print-disabled "gui/$uid" |
-            grep -q '"com.apple.notificationcenterui.agent" => disabled'; then
-            echo disabled >target/macos-notificationcenterui-original-state.txt
-            launchctl enable "gui/$uid/com.apple.notificationcenterui.agent" \
-              >>target/macos-session-services.txt 2>&1
-          else
-            echo enabled >target/macos-notificationcenterui-original-state.txt
-          fi
-
-          for directory in /System/Library/LaunchAgents /System/Library/LaunchDaemons; do
-            for plist in "$directory"/*[Nn]otification*.plist "$directory"/*[Uu]ser[Nn]ot*.plist; do
-              [[ -e "$plist" ]] || continue
-              label=$(/usr/libexec/PlistBuddy -c 'Print :Label' "$plist" 2>/dev/null)
-              [[ -n "$label" ]] || continue
-              {
-                echo "plist=$plist"
-                echo "label=$label"
-                launchctl print "gui/$uid/$label"
-              } >>target/macos-session-services.txt 2>&1
-              if ! launchctl print "gui/$uid/$label" >/dev/null 2>&1; then
-                launchctl bootstrap "gui/$uid" "$plist" \
-                  >>target/macos-session-services.txt 2>&1
-              fi
-              launchctl kickstart -k "gui/$uid/$label" \
-                >>target/macos-session-services.txt 2>&1
-            done
-          done
-
-          for app in \
-            /System/Library/CoreServices/NotificationCenter.app \
-            /System/Library/CoreServices/UserNotificationCenter.app; do
-            if [[ -d "$app" ]]; then
-              echo "opening=$app" >>target/macos-session-services.txt
-              open -g "$app" >>target/macos-session-services.txt 2>&1
-            fi
-          done
-          sleep 5
-          {
-            echo 'Processes after:'
-            pgrep -lf 'WindowServer|loginwindow|NotificationCenter|UserNotificationCenter|usernotificationsd|usernoted'
-            echo 'GUI notification services after:'
-            launchctl print "gui/$uid" | grep -i -C 2 notification
-            echo 'Disabled overrides after enable:'
+            echo 'Disabled overrides at clean start:'
             launchctl print-disabled "gui/$uid"
-          } >>target/macos-session-services.txt 2>&1
-
-      - name: Prepare screen-capture evidence
-        shell: bash
-        run: |
-          set +e
-          screencapture -x target/macos-screen-preflight.png \
-            2>target/macos-screen-preflight-error.txt
-          for attempt in $(seq 1 40); do
-            osascript >target/macos-screen-permission.txt 2>&1 <<'APPLESCRIPT'
-          tell application "System Events"
-              try
-                  tell process "UserNotificationCenter"
-                      repeat with candidateWindow in windows
-                          set candidateElements to entire contents of candidateWindow
-                          repeat with candidateElement in candidateElements
-                              try
-                                  if role of candidateElement is "AXButton" and name of candidateElement is "Allow" then
-                                      click candidateElement
-                                      return "clicked screen-capture Allow"
-                                  end if
-                              end try
-                          end repeat
-                      end repeat
-                  end tell
-              end try
-              return "screen-capture Allow not found"
-          end tell
-          APPLESCRIPT
-            if grep -q '^clicked ' target/macos-screen-permission.txt; then
-              break
-            fi
-            sleep 0.25
-          done
-          sleep 2
-          screencapture -x target/macos-screen-ready.png \
-            2>target/macos-screen-ready-error.txt
+            echo 'usernoted:'
+            launchctl print "gui/$uid/com.apple.usernoted"
+            echo 'usernotificationsd:'
+            launchctl print "gui/$uid/com.apple.usernotificationsd"
+            echo 'notificationcenterui.agent:'
+            launchctl print "gui/$uid/com.apple.notificationcenterui.agent"
+            echo 'UserNotificationCenterAgent:'
+            launchctl print "gui/$uid/com.apple.UserNotificationCenterAgent"
+          } >target/macos-session-services.txt 2>&1
 
       - name: Build macOS smoke executable
         run: cargo test -p codex-notifier-native-notification --test macos_smoke --no-run
@@ -598,16 +525,15 @@ jobs:
           smoke_pid=$!
 
           sleep 2
-          screencapture -x target/macos-before.png \
-            2>target/macos-before-error.txt
           clicked=''
           for attempt in $(seq 1 80); do
-            CODEX_PROBE_SCREENSHOT="$PWD/target/macos-permission-prompt.png" \
-              osascript >target/macos-ui-current.txt 2>&1 <<'APPLESCRIPT'
+            osascript >target/macos-ui-current.txt 2>&1 <<'APPLESCRIPT'
           tell application "System Events"
-              try
-                  tell process "UserNotificationCenter"
-                      repeat with candidateWindow in windows
+              repeat with candidateProcess in application processes
+                  try
+                      set processName to name of candidateProcess as text
+                      if processName contains "Notification" or processName is "System Settings" then
+                          repeat with candidateWindow in windows of candidateProcess
                           set candidateElements to entire contents of candidateWindow
                           set windowText to ""
                           repeat with candidateElement in candidateElements
@@ -622,20 +548,17 @@ jobs:
                               repeat with candidateElement in candidateElements
                                   try
                                       if role of candidateElement is "AXButton" and name of candidateElement is "Allow" then
-                                          set screenshotPath to system attribute "CODEX_PROBE_SCREENSHOT"
-                                          do shell script "/usr/sbin/screencapture -x " & quoted form of screenshotPath
                                           click candidateElement
-                                          return "clicked=notification text=" & windowText
+                                          return "clicked=notification process=" & processName & " text=" & windowText
                                       end if
                                   end try
                               end repeat
                           end if
-                      end repeat
-                      return "notification Allow not found"
-                  end tell
-              on error errorMessage
-                  return "notification UI unavailable: " & errorMessage
-              end try
+                          end repeat
+                      end if
+                  end try
+              end repeat
+              return "notification Allow not found"
           end tell
           APPLESCRIPT
             cat target/macos-ui-current.txt >target/macos-ui.txt
@@ -658,8 +581,6 @@ jobs:
             fi
             sleep 0.5
           done
-          screencapture -x target/macos-after.png \
-            2>target/macos-after-error.txt
           if [[ -z "$result" ]]; then
             echo "Smoke timed out clicked=$clicked" >>target/macos-smoke.log
             kill "$smoke_pid" 2>/dev/null
@@ -668,8 +589,22 @@ jobs:
             result=124
           fi
 
+          uid="$(id -u)"
+          {
+            echo 'Processes after authorization attempt:'
+            pgrep -lf 'WindowServer|loginwindow|NotificationCenter|UserNotificationCenter|usernotificationsd|usernoted'
+            echo 'usernoted after:'
+            launchctl print "gui/$uid/com.apple.usernoted"
+            echo 'usernotificationsd after:'
+            launchctl print "gui/$uid/com.apple.usernotificationsd"
+            echo 'notificationcenterui.agent after:'
+            launchctl print "gui/$uid/com.apple.notificationcenterui.agent"
+            echo 'UserNotificationCenterAgent after:'
+            launchctl print "gui/$uid/com.apple.UserNotificationCenterAgent"
+          } >>target/macos-session-services.txt 2>&1
+
           log show --last 4m --style compact \
-            --predicate 'process == "codex-notifier-macos-smoke" OR process == "NotificationCenter" OR process == "UserNotificationCenter" OR subsystem CONTAINS "UserNotifications"' \
+            --predicate 'process == "codex-notifier-macos-smoke" OR process == "NotificationCenter" OR process == "UserNotificationCenter" OR process == "usernoted" OR process == "usernotificationsd" OR subsystem CONTAINS "UserNotifications"' \
             >target/macos-unified.log 2>&1 || true
           cat target/macos-ui.txt
           cat target/macos-smoke.log
@@ -709,12 +644,6 @@ jobs:
           fi
           if [[ -n "${CODEX_NOTIFIER_MACOS_SIGNING_DIRECTORY:-}" ]]; then
             rm -rf "$CODEX_NOTIFIER_MACOS_SIGNING_DIRECTORY"
-          fi
-          if grep -q '^disabled$' \
-            target/macos-notificationcenterui-original-state.txt 2>/dev/null; then
-            uid="$(id -u)"
-            launchctl bootout "gui/$uid/com.apple.notificationcenterui.agent"
-            launchctl disable "gui/$uid/com.apple.notificationcenterui.agent"
           fi
 
       - name: Upload macOS evidence
