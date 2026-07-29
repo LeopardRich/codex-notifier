@@ -20,6 +20,21 @@ on clickCenter(candidateElement, clickHelper, mode)
     return "x=" & clickX & " y=" & clickY
 end clickCenter
 
+on clickBanner(candidateElement, clickHelper, mode)
+    tell application "System Events"
+        set elementPosition to position of candidateElement
+        set elementSize to size of candidateElement
+    end tell
+    set clickX to (item 1 of elementPosition) + ((item 1 of elementSize) div 2)
+    if (item 2 of elementSize) > 50 then
+        set clickY to (item 2 of elementPosition) + 25
+    else
+        set clickY to (item 2 of elementPosition) + ((item 2 of elementSize) div 2)
+    end if
+    do shell script quoted form of clickHelper & " " & mode & " " & clickX & " " & clickY
+    return "x=" & clickX & " y=" & clickY
+end clickBanner
+
 on run
     set clickHelper to system attribute "CODEX_LIFECYCLE_CLICK_HELPER"
     set bannerHovered to system attribute "CODEX_LIFECYCLE_BANNER_HOVERED"
@@ -98,11 +113,11 @@ on run
                                 set textValue to my elementText(candidateElement)
                                 if textValue contains "Codex Notifier" or textValue contains "Notifications may include" then
                                     if bannerHovered is not "1" then
-                                        set clicked to my clickCenter(candidateElement, clickHelper, "move")
+                                        set clicked to my clickBanner(candidateElement, clickHelper, "move")
                                         return "hovered=banner " & clicked
                                     end if
                                     if bannerPressed is not "1" then
-                                        set clicked to my clickCenter(candidateElement, clickHelper, "click")
+                                        set clicked to my clickBanner(candidateElement, clickHelper, "click")
                                         return "pressed=banner " & clicked
                                     end if
                                 end if
