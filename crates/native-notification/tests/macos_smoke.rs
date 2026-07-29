@@ -17,7 +17,7 @@ use codex_notifier_native_notification::{
     CODEX_NOTIFIER_BUNDLE_ID, MacOsNotificationBackend, NativeNotificationAdapter,
     NotificationBackend, NotificationContentPolicy, NotificationPolicy, NotificationStatus,
 };
-use tempfile::tempdir;
+use tempfile::Builder;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 const BUNDLED_SMOKE_ENV: &str = "CODEX_NOTIFIER_BUNDLED_MACOS_SMOKE";
@@ -46,7 +46,7 @@ fn event(kind: EventKind, id: &str, urgency: Urgency) -> CanonicalEvent {
 #[ignore = "requires an interactive Aqua session, prompts for authorization, and displays two notifications"]
 fn displays_task_completion_and_approval_request_notifications() {
     if std::env::var_os(BUNDLED_SMOKE_ENV).is_none() {
-        relaunch_in_product_bundle(TEST_NAME);
+        relaunch_in_product_bundle(TEST_NAME, None);
         return;
     }
 
@@ -97,7 +97,7 @@ fn reports_real_missing_application_identity() {
 #[ignore = "requires a signed product bundle running without an Aqua launch domain"]
 fn reports_real_no_gui_session() {
     if std::env::var_os(BUNDLED_SMOKE_ENV).is_none() {
-        relaunch_in_product_bundle(NO_GUI_TEST_NAME);
+        relaunch_in_product_bundle(NO_GUI_TEST_NAME, Some("nobody"));
         return;
     }
 
@@ -110,8 +110,19 @@ fn reports_real_no_gui_session() {
     );
 }
 
-fn relaunch_in_product_bundle(test_name: &str) {
-    let directory = tempdir().expect("temporary smoke bundle directory");
+fn relaunch_in_product_bundle(test_name: &str, run_as_user: Option<&str>) {
+    let directory = Builder::new()
+        .prefix("codex-notifier-smoke-")
+        .tempdir_in("/tmp")
+        .expect("temporary smoke bundle directory");
+    if run_as_user.is_some() {
+        let mut permissions = fs::metadata(directory.path())
+            .expect("read smoke directory metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(directory.path(), permissions)
+            .expect("make smoke directory traversable");
+    }
     let bundle = directory.path().join("Codex Notifier.app");
     let contents = bundle.join("Contents");
     let macos = contents.join("MacOS");
@@ -140,9 +151,19 @@ fn relaunch_in_product_bundle(test_name: &str) {
         .expect("run ad-hoc codesign for smoke bundle");
     assert!(signed.success(), "ad-hoc codesign failed: {signed}");
 
-    let status = Command::new(&bundled)
+    let mut command = if let Some(user) = run_as_user {
+        let mut command = Command::new("/usr/bin/sudo");
+        command.args(["-u", user, "env", "HOME=/tmp", "TMPDIR=/tmp"]);
+        command.arg(format!("{BUNDLED_SMOKE_ENV}=1"));
+        command.arg(&bundled);
+        command
+    } else {
+        let mut command = Command::new(&bundled);
+        command.env(BUNDLED_SMOKE_ENV, "1");
+        command
+    };
+    let status = command
         .args(["--exact", test_name, "--ignored", "--nocapture"])
-        .env(BUNDLED_SMOKE_ENV, "1")
         .status()
         .expect("launch bundled smoke test");
     assert!(status.success(), "bundled smoke test failed: {status}");

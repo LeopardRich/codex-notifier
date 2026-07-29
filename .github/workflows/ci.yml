@@ -41,7 +41,43 @@ jobs:
 
       - name: Verify Windows Session 0 diagnostic
         if: matrix.target == 'windows-desktop'
-        run: cargo test -p codex-notifier-native-notification --test windows_smoke reports_real_non_interactive_session -- --ignored --exact --nocapture
+        shell: pwsh
+        run: |
+          cargo test -p codex-notifier-native-notification --test windows_smoke --no-run
+          $testBinary = Get-ChildItem target\debug\deps\windows_smoke-*.exe |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          if (-not $testBinary) { throw 'Windows smoke test binary was not built' }
+
+          $taskName = "codex-notifier-session0-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $action = New-ScheduledTaskAction `
+            -Execute $testBinary.FullName `
+            -Argument '--exact reports_real_non_interactive_session --ignored --nocapture'
+          $principal = New-ScheduledTaskPrincipal `
+            -UserId 'SYSTEM' `
+            -LogonType ServiceAccount `
+            -RunLevel Highest
+          try {
+            Register-ScheduledTask `
+              -TaskName $taskName `
+              -Action $action `
+              -Principal $principal `
+              -Force | Out-Null
+            Start-ScheduledTask -TaskName $taskName
+            $deadline = [DateTime]::UtcNow.AddSeconds(60)
+            do {
+              Start-Sleep -Milliseconds 250
+              $task = Get-ScheduledTask -TaskName $taskName
+              $info = Get-ScheduledTaskInfo -TaskName $taskName
+            } while ($task.State -eq 'Running' -and [DateTime]::UtcNow -lt $deadline)
+            if ($task.State -eq 'Running') { throw 'Session 0 diagnostic timed out' }
+            if ($info.LastTaskResult -ne 0) {
+              throw "Session 0 diagnostic failed with exit code $($info.LastTaskResult)"
+            }
+          }
+          finally {
+            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+          }
 
       - name: Build macOS notification smoke tests
         if: matrix.target == 'macos-desktop'
@@ -49,7 +85,4 @@ jobs:
 
       - name: Verify macOS no-Aqua diagnostic
         if: matrix.target == 'macos-desktop'
-        run: |
-          test_binary="$(find target/debug/deps -maxdepth 1 -type f -name 'macos_smoke-*' ! -name '*.d' | head -n 1)"
-          test -n "$test_binary"
-          sudo -u nobody env HOME=/tmp TMPDIR=/tmp "$test_binary" --exact reports_real_no_gui_session --ignored --nocapture
+        run: cargo test -p codex-notifier-native-notification --test macos_smoke reports_real_no_gui_session -- --ignored --exact --nocapture
