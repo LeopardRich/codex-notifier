@@ -37,6 +37,11 @@ Scope: Windows native Toast adapter and diagnostics.
   Windows real-state tests remain explicitly ignored during normal runs.
 - The local GNU Rust link used temporary official MSYS2 binutils/GCC startup
   objects under ignored `target/`; no toolchain or system PATH was modified.
+- GitHub Actions run
+  [`30438113181`](https://github.com/LeopardRich/codex-notifier/actions/runs/30438113181)
+  for commit `69143203a1bd7754eb4fbd2bde55cdd83aa132cd` passed formatting,
+  warnings-as-errors Clippy, and workspace tests on Windows, macOS, and Linux.
+  Normal CI did not execute either ignored Windows real-state test.
 
 ## Real smoke attempt
 

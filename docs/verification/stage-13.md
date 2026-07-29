@@ -55,9 +55,13 @@ and packaging resources.
   backend and its tests. Dependency build scripts ran with `DOCS_RS=1`, so the
   Swift bridge and Apple framework linker were intentionally not invoked on
   Windows.
-- Native macOS compilation and tests remain pending. Cross-target checks prove
-  Rust/API correctness and target isolation, not Swift compilation, framework
-  linking, authorization, or notification display behavior.
+- GitHub Actions run
+  [`30438113181`](https://github.com/LeopardRich/codex-notifier/actions/runs/30438113181)
+  for commit `69143203a1bd7754eb4fbd2bde55cdd83aa132cd` passed formatting,
+  warnings-as-errors Clippy, and all normal workspace tests on a native
+  `macos-latest` runner. This exercised the Swift bridge build and Apple
+  framework linking. The ignored interactive smoke test did not run, so this is
+  not authorization or notification-display evidence.
 
 ## Required before completion
 
@@ -66,5 +70,4 @@ and packaging resources.
 - Repeat the same confirmation on the latest supported macOS release.
 - Record first authorization, denial, Focus/Do Not Disturb, and no-GUI session
   diagnostics in real system states.
-- Pass native macOS warnings-as-errors Clippy and workspace tests. Until these
-  items are complete, Stage 13 is not a support claim.
+- Until these interactive items are complete, Stage 13 is not a support claim.
