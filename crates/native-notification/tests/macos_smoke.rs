@@ -36,6 +36,7 @@ mod macos {
     use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
     const RESULT_PATH_ENV: &str = "CODEX_NOTIFIER_MACOS_SMOKE_RESULT";
+    const RECOVER_AUTHORIZATION_ENV: &str = "CODEX_NOTIFIER_MACOS_SMOKE_RECOVER_AUTHORIZATION";
     const SMOKE_ROOT_ENV: &str = "CODEX_NOTIFIER_MACOS_SMOKE_ROOT";
     const SIGNING_IDENTITY_ENV: &str = "CODEX_NOTIFIER_MACOS_SIGNING_IDENTITY";
     const SIGNING_KEYCHAIN_ENV: &str = "CODEX_NOTIFIER_MACOS_SIGNING_KEYCHAIN";
@@ -165,17 +166,36 @@ mod macos {
 
         let deadline = Instant::now() + AUTHORIZATION_TIMEOUT;
         let default_run_loop_mode = NSString::from_str("kCFRunLoopDefaultMode");
+        let recover_authorization = std::env::var_os(RECOVER_AUTHORIZATION_ENV).is_some();
+        let mut awaiting_settings_grant = false;
         loop {
+            if awaiting_settings_grant {
+                let diagnostic = MacOsNotificationBackend::codex_notifier().diagnose();
+                if diagnostic.status() == NotificationStatus::Ready {
+                    eprintln!(
+                        "macOS notification authorization recovered through System Settings; diagnostic={diagnostic:?}"
+                    );
+                    break;
+                }
+            }
             match receiver.try_recv() {
                 Ok((granted, error_free)) => {
-                    if !error_free {
+                    if !error_free || !granted {
                         let diagnostic = MacOsNotificationBackend::codex_notifier().diagnose();
-                        panic!(
-                            "macOS notification authorization returned an error; diagnostic={diagnostic:?}"
-                        );
+                        if recover_authorization {
+                            eprintln!(
+                                "macOS notification authorization requires System Settings recovery; granted={granted}, error_free={error_free}, diagnostic={diagnostic:?}"
+                            );
+                            awaiting_settings_grant = true;
+                        } else {
+                            panic!(
+                                "macOS notification authorization failed; granted={granted}, error_free={error_free}, diagnostic={diagnostic:?}"
+                            );
+                        }
                     }
-                    assert!(granted, "macOS notification authorization must be granted");
-                    break;
+                    if granted && error_free {
+                        break;
+                    }
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -300,7 +320,14 @@ mod macos {
             .arg("--stderr")
             .arg(&stderr_path)
             .arg("--env")
-            .arg(format!("{RESULT_PATH_ENV}={}", result_path.display()))
+            .arg(format!("{RESULT_PATH_ENV}={}", result_path.display()));
+        if let Some(value) = std::env::var_os(RECOVER_AUTHORIZATION_ENV) {
+            command.arg("--env").arg(format!(
+                "{RECOVER_AUTHORIZATION_ENV}={}",
+                value.to_string_lossy()
+            ));
+        }
+        command
             .arg(&bundle)
             .args(["--args", "--exact", test_name, "--ignored", "--nocapture"]);
         let status = command

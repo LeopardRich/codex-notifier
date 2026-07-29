@@ -558,6 +558,7 @@ jobs:
         run: |
           set +e
           CODEX_NOTIFIER_MACOS_SMOKE_ROOT=/Applications \
+            CODEX_NOTIFIER_MACOS_SMOKE_RECOVER_AUTHORIZATION=1 \
             CODEX_NOTIFIER_MACOS_SIGNING_IDENTITY="$CODEX_NOTIFIER_MACOS_SIGNING_IDENTITY" \
             cargo test -p codex-notifier-native-notification \
             --test macos_smoke \
@@ -573,13 +574,19 @@ jobs:
           banner_hovered=''
           banner_pressed=''
           screen_pressed=''
+          settings_app_pressed=''
+          settings_allow_pressed=''
           for attempt in $(seq 1 80); do
             CODEX_PROBE_SCREENSHOT="$PWD/target/macos-permission-prompt.png" \
+              CODEX_PROBE_SETTINGS_APP_SCREENSHOT="$PWD/target/macos-settings-app.png" \
+              CODEX_PROBE_SETTINGS_ALLOW_SCREENSHOT="$PWD/target/macos-settings-allow.png" \
               CODEX_PROBE_CLICK_HELPER="$PWD/target/macos-probe-click" \
               CODEX_PROBE_NOTIFICATION_CLICKED="$notification_clicked" \
               CODEX_PROBE_BANNER_HOVERED="$banner_hovered" \
               CODEX_PROBE_BANNER_PRESSED="$banner_pressed" \
               CODEX_PROBE_SCREEN_PRESSED="$screen_pressed" \
+              CODEX_PROBE_SETTINGS_APP_PRESSED="$settings_app_pressed" \
+              CODEX_PROBE_SETTINGS_ALLOW_PRESSED="$settings_allow_pressed" \
               osascript >target/macos-ui-current.txt 2>&1 <<'APPLESCRIPT'
           tell application "System Events"
               set observations to ""
@@ -588,6 +595,8 @@ jobs:
               set bannerHovered to system attribute "CODEX_PROBE_BANNER_HOVERED"
               set bannerPressed to system attribute "CODEX_PROBE_BANNER_PRESSED"
               set screenPressed to system attribute "CODEX_PROBE_SCREEN_PRESSED"
+              set settingsAppPressed to system attribute "CODEX_PROBE_SETTINGS_APP_PRESSED"
+              set settingsAllowPressed to system attribute "CODEX_PROBE_SETTINGS_ALLOW_PRESSED"
               repeat with candidateProcess in application processes
                   try
                       set processName to name of candidateProcess as text
@@ -605,6 +614,44 @@ jobs:
                                   end try
                               end repeat
                               set observations to observations & " text=" & windowText
+                              if processName is "System Settings" and bannerPressed is "1" then
+                                  if settingsAllowPressed is not "1" then
+                                      repeat with candidateElement in candidateElements
+                                          try
+                                              set elementName to name of candidateElement as text
+                                              set elementRole to role of candidateElement as text
+                                              if elementName is "Allow notifications" and (elementRole is "AXCheckBox" or elementRole is "AXSwitch" or elementRole is "AXButton") then
+                                                  set screenshotPath to system attribute "CODEX_PROBE_SETTINGS_ALLOW_SCREENSHOT"
+                                                  do shell script "/usr/sbin/screencapture -x " & quoted form of screenshotPath
+                                                  set elementPosition to position of candidateElement
+                                                  set elementSize to size of candidateElement
+                                                  set clickX to (item 1 of elementPosition) + ((item 1 of elementSize) div 2)
+                                                  set clickY to (item 2 of elementPosition) + ((item 2 of elementSize) div 2)
+                                                  do shell script quoted form of clickHelper & " click " & clickX & " " & clickY
+                                                  return "pressed=settings-allow process=" & processName & " role=" & elementRole & " x=" & clickX & " y=" & clickY
+                                              end if
+                                          end try
+                                      end repeat
+                                  end if
+                                  if settingsAppPressed is not "1" then
+                                      repeat with candidateElement in candidateElements
+                                          try
+                                              set elementName to name of candidateElement as text
+                                              set elementRole to role of candidateElement as text
+                                              if elementName contains "Codex Notifier" and (elementRole is "AXStaticText" or elementRole is "AXButton" or elementRole is "AXGroup") then
+                                                  set screenshotPath to system attribute "CODEX_PROBE_SETTINGS_APP_SCREENSHOT"
+                                                  do shell script "/usr/sbin/screencapture -x " & quoted form of screenshotPath
+                                                  set elementPosition to position of candidateElement
+                                                  set elementSize to size of candidateElement
+                                                  set clickX to (item 1 of elementPosition) + ((item 1 of elementSize) div 2)
+                                                  set clickY to (item 2 of elementPosition) + ((item 2 of elementSize) div 2)
+                                                  do shell script quoted form of clickHelper & " click " & clickX & " " & clickY
+                                                  return "pressed=settings-app process=" & processName & " role=" & elementRole & " x=" & clickX & " y=" & clickY
+                                              end if
+                                          end try
+                                      end repeat
+                                  end if
+                              end if
                               if processName is "UserNotificationCenter" and windowText contains "screen and audio" then
                                   repeat with candidateElement in candidateElements
                                       try
@@ -619,7 +666,7 @@ jobs:
                                       end try
                                   end repeat
                               end if
-                              if windowText contains "Codex Notifier" and windowText contains "Notifications" then
+                              if processName is "NotificationCenter" and windowText contains "Codex Notifier" and windowText contains "Notifications" then
                                   repeat with candidateElement in candidateElements
                                       try
                                           if notificationClicked is not "1" and role of candidateElement is "AXButton" and name of candidateElement is "Allow" then
@@ -630,7 +677,7 @@ jobs:
                                               set clickX to (item 1 of buttonPosition) + ((item 1 of buttonSize) div 2)
                                               set clickY to (item 2 of buttonPosition) + ((item 2 of buttonSize) div 2)
                                               do shell script quoted form of clickHelper & " click " & clickX & " " & clickY
-                                              return "clicked=notification process=" & processName & " text=" & windowText
+                                              return "granted=notification process=" & processName & " text=" & windowText
                                           end if
                                       end try
                                   end repeat
@@ -671,7 +718,7 @@ jobs:
           APPLESCRIPT
             cat target/macos-ui-current.txt >target/macos-ui.txt
             cat target/macos-ui-current.txt >>target/macos-ui-history.txt
-            if grep -q '^clicked=' target/macos-ui-current.txt; then
+            if grep -q '^granted=notification' target/macos-ui-current.txt; then
               notification_clicked=1
               break
             fi
@@ -687,6 +734,16 @@ jobs:
             fi
             if grep -q '^pressed=banner-coordinate' target/macos-ui-current.txt; then
               banner_pressed=1
+              sleep 2
+              continue
+            fi
+            if grep -q '^pressed=settings-app' target/macos-ui-current.txt; then
+              settings_app_pressed=1
+              sleep 2
+              continue
+            fi
+            if grep -q '^pressed=settings-allow' target/macos-ui-current.txt; then
+              settings_allow_pressed=1
               sleep 2
               continue
             fi
@@ -708,7 +765,7 @@ jobs:
             sleep 0.5
           done
           if [[ -z "$result" ]]; then
-            echo "Smoke timed out notification_clicked=$notification_clicked banner_hovered=$banner_hovered banner_pressed=$banner_pressed screen_pressed=$screen_pressed" >>target/macos-smoke.log
+            echo "Smoke timed out notification_clicked=$notification_clicked banner_hovered=$banner_hovered banner_pressed=$banner_pressed screen_pressed=$screen_pressed settings_app_pressed=$settings_app_pressed settings_allow_pressed=$settings_allow_pressed" >>target/macos-smoke.log
             kill "$smoke_pid" 2>/dev/null
             pkill -f codex-notifier-macos-smoke 2>/dev/null
             wait "$smoke_pid" 2>/dev/null
