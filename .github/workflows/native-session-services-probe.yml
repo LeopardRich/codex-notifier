@@ -386,37 +386,17 @@ jobs:
           set +e
           screencapture -x target/macos-screen-preflight.png \
             2>target/macos-screen-preflight-error.txt
-          for attempt in $(seq 1 40); do
-            osascript >target/macos-screen-permission.txt 2>&1 <<'APPLESCRIPT'
-          tell application "System Events"
-              try
-                  tell process "UserNotificationCenter"
-                      repeat with candidateWindow in windows
-                          repeat with candidateElement in entire contents of candidateWindow
-                              try
-                                  if role of candidateElement is "AXButton" and name of candidateElement is "Allow" then
-                                      perform action "AXPress" of candidateElement
-                                      return "pressed screen-capture Allow"
-                                  end if
-                              end try
-                          end repeat
-                      end repeat
-                  end tell
-              end try
-              return "screen-capture Allow not found"
-          end tell
-          APPLESCRIPT
-            if grep -q '^pressed ' target/macos-screen-permission.txt; then
-              break
-            fi
-            sleep 0.25
-          done
-          sleep 2
-          screencapture -x target/macos-screen-ready.png \
-            2>target/macos-screen-ready-error.txt
+          echo 'screen-capture prompt handled in authorization loop' \
+            >target/macos-screen-permission.txt
+          sleep 1
 
-      - name: Build macOS smoke executable
-        run: cargo test -p codex-notifier-native-notification --test macos_smoke --no-run
+      - name: Build macOS smoke executable and click helper
+        shell: bash
+        run: |
+          cargo test -p codex-notifier-native-notification --test macos_smoke --no-run
+          xcrun swiftc \
+            .github/scripts/macos-probe-click.swift \
+            -o target/macos-probe-click
 
       - name: Create temporary code-signing identity
         shell: bash
@@ -592,9 +572,11 @@ jobs:
           clicked=''
           for attempt in $(seq 1 80); do
             CODEX_PROBE_SCREENSHOT="$PWD/target/macos-permission-prompt.png" \
+              CODEX_PROBE_CLICK_HELPER="$PWD/target/macos-probe-click" \
               osascript >target/macos-ui-current.txt 2>&1 <<'APPLESCRIPT'
           tell application "System Events"
               set observations to ""
+              set clickHelper to system attribute "CODEX_PROBE_CLICK_HELPER"
               repeat with candidateProcess in application processes
                   try
                       set processName to name of candidateProcess as text
@@ -612,19 +594,31 @@ jobs:
                                   end try
                               end repeat
                               set observations to observations & " text=" & windowText
+                              if processName is "UserNotificationCenter" and windowText contains "screen and audio" then
+                                  repeat with candidateElement in candidateElements
+                                      try
+                                          if role of candidateElement is "AXButton" and name of candidateElement is "Allow" then
+                                              set buttonPosition to position of candidateElement
+                                              set buttonSize to size of candidateElement
+                                              set clickX to (item 1 of buttonPosition) + ((item 1 of buttonSize) div 2)
+                                              set clickY to (item 2 of buttonPosition) + ((item 2 of buttonSize) div 2)
+                                              do shell script quoted form of clickHelper & " " & clickX & " " & clickY
+                                              return "pressed=screen-coordinate x=" & clickX & " y=" & clickY
+                                          end if
+                                      end try
+                                  end repeat
+                              end if
                               if windowText contains "Codex Notifier" and windowText contains "Notifications" then
                                   repeat with candidateElement in candidateElements
                                       try
                                           if role of candidateElement is "AXButton" and name of candidateElement is "Allow" then
                                               set screenshotPath to system attribute "CODEX_PROBE_SCREENSHOT"
                                               do shell script "/usr/sbin/screencapture -x " & quoted form of screenshotPath
-                                              try
-                                                  perform action "AXPress" of candidateElement
-                                              on error
-                                                  set buttonPosition to position of candidateElement
-                                                  set buttonSize to size of candidateElement
-                                                  click at {(item 1 of buttonPosition) + ((item 1 of buttonSize) div 2), (item 2 of buttonPosition) + ((item 2 of buttonSize) div 2)}
-                                              end try
+                                              set buttonPosition to position of candidateElement
+                                              set buttonSize to size of candidateElement
+                                              set clickX to (item 1 of buttonPosition) + ((item 1 of buttonSize) div 2)
+                                              set clickY to (item 2 of buttonPosition) + ((item 2 of buttonSize) div 2)
+                                              do shell script quoted form of clickHelper & " " & clickX & " " & clickY
                                               return "clicked=notification process=" & processName & " text=" & windowText
                                           end if
                                       end try
@@ -645,7 +639,7 @@ jobs:
                                               set elementSize to size of candidateElement
                                               set clickX to (item 1 of elementPosition) + ((item 1 of elementSize) div 2)
                                               set clickY to (item 2 of elementPosition) + ((item 2 of elementSize) div 2)
-                                              click at {clickX, clickY}
+                                              do shell script quoted form of clickHelper & " " & clickX & " " & clickY
                                               return "pressed=banner-coordinate process=" & processName & " x=" & clickX & " y=" & clickY & " element=" & elementText
                                           end if
                                       end try
