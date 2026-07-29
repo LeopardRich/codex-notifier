@@ -13,6 +13,7 @@ path = "src/main.rs"
 codex-notifier-application = { path = "../../crates/application" }
 codex-notifier-config = { path = "../../crates/config" }
 codex-notifier-core = { path = "../../crates/core" }
+codex-notifier-codex-source = { path = "../../crates/codex-source" }
 codex-notifier-ipc = { path = "../../crates/ipc" }
 codex-notifier-persistence = { path = "../../crates/persistence" }
 thiserror.workspace = true
@@ -20,6 +21,7 @@ time.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 tempfile.workspace = true
 
 [lints]

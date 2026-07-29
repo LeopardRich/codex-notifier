@@ -1,16 +1,19 @@
 //! Real IPC/SQLite composition, single-instance, and shutdown contract tests.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::io::Write;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
 
-use codex_notifier::{AgentHost, HostError};
+use codex_notifier::{AgentHost, EmitError, HostError, TaskCompletedEmitter};
 use codex_notifier_application::{
     AgentError, AgentLease, AgentPolicy, AgentQueue, AgentQueueError, AgentRuntime, AgentState,
     CancellationToken, DeliveryFuture, DeliveryOutcome, EnqueueResult, EventDelivery,
     RoleDeliveryFactory, RuntimeRole, SafeErrorCode,
 };
+use codex_notifier_codex_source::{SourceError, TaskCompletedContext};
 use codex_notifier_config::{
     CliOverrides, Config, ConfigLoader, PathEnvironment, Platform, StateDirectoryProbe,
 };
@@ -139,6 +142,7 @@ impl RoleDeliveryFactory for TestFactory {
 struct MemoryQueue {
     queued: Mutex<VecDeque<CanonicalEvent>>,
     leased: Mutex<BTreeMap<String, CanonicalEvent>>,
+    submitted: Mutex<Vec<CanonicalEvent>>,
     next: AtomicUsize,
 }
 
@@ -147,6 +151,7 @@ impl MemoryQueue {
         Self {
             queued: Mutex::new(VecDeque::new()),
             leased: Mutex::new(BTreeMap::new()),
+            submitted: Mutex::new(Vec::new()),
             next: AtomicUsize::new(0),
         }
     }
@@ -157,10 +162,18 @@ impl MemoryQueue {
             self.leased.lock().expect("leased").len(),
         )
     }
+
+    fn submissions(&self) -> Vec<CanonicalEvent> {
+        self.submitted.lock().expect("submitted").clone()
+    }
 }
 
 impl AgentQueue for MemoryQueue {
     fn enqueue(&self, event: &CanonicalEvent) -> Result<EnqueueResult, AgentQueueError> {
+        self.submitted
+            .lock()
+            .map_err(|_| AgentQueueError::Unavailable)?
+            .push(event.clone());
         self.queued
             .lock()
             .map_err(|_| AgentQueueError::Unavailable)?
@@ -219,6 +232,19 @@ impl AgentQueue for MemoryQueue {
     ) -> Result<(), AgentQueueError> {
         self.acknowledge(lease)
     }
+}
+
+fn task_completed_payload() -> Vec<u8> {
+    let fixture: serde_json::Value = serde_json::from_slice(include_bytes!(
+        "../../../tests/fixtures/codex-0.144.5-windows-cli-task-completed.json"
+    ))
+    .expect("task-completion fixture");
+    let mut payload = fixture.get("payload").cloned().expect("fixture payload");
+    payload
+        .as_object_mut()
+        .expect("payload object")
+        .remove("observed_keys");
+    serde_json::to_vec(&payload).expect("hook payload")
 }
 
 #[derive(Clone, Copy)]
@@ -308,6 +334,139 @@ async fn real_ipc_and_sqlite_route_only_to_selected_desktop_port() {
     assert_eq!(report.agent.delivered, 1);
     assert_eq!(factory.desktop_calls.load(Ordering::Acquire), 1);
     assert_eq!(factory.relay_calls.load(Ordering::Acquire), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_hook_stdin_emit_reaches_agent_without_sensitive_values() {
+    let directory = test_directory();
+    let endpoint = endpoint(&directory);
+    let ipc_profile = endpoint.profile().to_owned();
+    let queue = Arc::new(MemoryQueue::new());
+    let factory = TestFactory::new(TestDelivery::immediate());
+    let host = AgentHost::bind(
+        endpoint,
+        IpcPolicy::default(),
+        RuntimeRole::Desktop,
+        AgentPolicy::new(1, StdDuration::from_secs(1)).expect("policy"),
+        queue.clone(),
+        &factory,
+    )
+    .expect("host");
+    let runtime = host.runtime();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let runner = tokio::spawn(async move {
+        host.run_until(async {
+            let _ = shutdown_rx.await;
+        })
+        .await
+    });
+    wait_ready(&runtime).await;
+
+    let payload = task_completed_payload();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_codex-notifier"))
+        .args([
+            "emit",
+            "task-completed",
+            "--codex-version",
+            "0.144.5",
+            "--state-dir",
+        ])
+        .arg(directory.path())
+        .args([
+            "--ipc-profile",
+            &ipc_profile,
+            "--host-label",
+            "workstation",
+            "--project-label",
+            "codex-noti",
+            "--routing-profile",
+            "desktop",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("emit child");
+    child
+        .stdin
+        .take()
+        .expect("child stdin")
+        .write_all(&payload)
+        .expect("write hook payload");
+    let output = tokio::time::timeout(
+        StdDuration::from_secs(5),
+        tokio::task::spawn_blocking(move || child.wait_with_output()),
+    )
+    .await
+    .expect("emit timeout")
+    .expect("emit wait task")
+    .expect("emit output");
+    assert!(
+        output.status.success(),
+        "emit failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let submissions = queue.submissions();
+    assert_eq!(submissions.len(), 1);
+    let event = &submissions[0];
+    assert_eq!(event.kind(), EventKind::TaskCompleted);
+    assert_eq!(event.event_id().as_uuid().get_version_num(), 7);
+    assert_eq!(event.source().host_label(), "workstation");
+    assert_eq!(event.source().project_label(), Some("codex-noti"));
+    assert_eq!(
+        event.routing().map(codex_notifier_core::Routing::profile),
+        Some("desktop")
+    );
+    let canonical = String::from_utf8(event.to_json().expect("canonical JSON")).expect("UTF-8");
+    for sensitive in [
+        "<redacted-session-id>",
+        "<redacted-path>",
+        "<redacted-model>",
+        "<redacted-turn-id>",
+        "<redacted-message>",
+    ] {
+        assert!(!canonical.contains(sensitive));
+    }
+
+    shutdown_tx.send(()).expect("shutdown");
+    runner.await.expect("runner").expect("host run");
+}
+
+#[tokio::test]
+async fn emit_source_and_ipc_failures_remain_distinct() {
+    let directory = test_directory();
+    let endpoint = endpoint(&directory);
+    let context = TaskCompletedContext::new("workstation", None, None).expect("context");
+    assert_eq!(
+        TaskCompletedEmitter::new(
+            "0.144.6",
+            endpoint.clone(),
+            context.clone(),
+            IpcPolicy::default(),
+        )
+        .expect_err("unsupported version"),
+        EmitError::Source(SourceError::UnsupportedVersion)
+    );
+
+    let short_policy = IpcPolicy::new(
+        StdDuration::from_millis(20),
+        StdDuration::from_millis(20),
+        1,
+    )
+    .expect("short IPC policy");
+    let emitter =
+        TaskCompletedEmitter::new("0.144.5", endpoint, context, short_policy).expect("emitter");
+    assert_eq!(
+        emitter.emit(b"{}").await,
+        Err(EmitError::Source(SourceError::IncompatiblePayload))
+    );
+    assert!(matches!(
+        emitter.emit(&task_completed_payload()).await,
+        Err(EmitError::Ipc(
+            IpcError::ConnectionFailed | IpcError::Timeout
+        ))
+    ));
 }
 
 #[tokio::test]

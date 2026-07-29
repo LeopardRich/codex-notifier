@@ -10,10 +10,14 @@ use codex_notifier_application::{
     AgentError, AgentLease, AgentPolicy, AgentQueue, AgentQueueError, AgentRunReport, AgentRuntime,
     EnqueueResult, RoleDeliveryFactory, RuntimeRole, SafeErrorCode, SubmissionOutcome,
 };
+use codex_notifier_codex_source::{
+    CodexCliVersion, CodexInterface, SourceError, TaskCompletedAdapter, TaskCompletedContext,
+};
 use codex_notifier_config::{Config, Role};
-use codex_notifier_core::CanonicalEvent;
+use codex_notifier_core::{CanonicalEvent, EventId};
 use codex_notifier_ipc::{
-    AckError, Acknowledgement, IpcEndpoint, IpcError, IpcPolicy, IpcServer, ServeReport,
+    AckError, AckStatus, Acknowledgement, IpcClient, IpcEndpoint, IpcError, IpcPolicy, IpcServer,
+    ServeReport,
 };
 use codex_notifier_persistence::{EnqueueOutcome, PersistenceError, SqliteStore, StorePolicy};
 use thiserror::Error;
@@ -23,6 +27,101 @@ use tokio::sync::watch;
 const DEFAULT_WORKERS: usize = 4;
 const DATABASE_FILE: &str = "events.sqlite3";
 const INITIAL_RETRY_DELAY_MS: i64 = 250;
+
+/// Safe task-completion emission failures.
+#[derive(Clone, Debug, Eq, Error, PartialEq)]
+#[non_exhaustive]
+pub enum EmitError {
+    /// Codex version, interface, payload, or trusted context is incompatible.
+    #[error("Codex task-completion input is incompatible")]
+    Source(#[from] SourceError),
+    /// Local agent IPC could not complete safely.
+    #[error("local agent submission failed")]
+    Ipc(#[from] IpcError),
+    /// The local agent returned a validated structured rejection.
+    #[error("local agent rejected the event")]
+    Rejected(AckError),
+}
+
+impl EmitError {
+    /// Returns a stable safe diagnostic code without payload or endpoint data.
+    #[must_use]
+    pub fn code(&self) -> &str {
+        match self {
+            Self::Source(error) => error.code().as_str(),
+            Self::Ipc(error) => error.code().as_str(),
+            Self::Rejected(error) => error.code(),
+        }
+    }
+
+    /// Returns whether a later submission may succeed without changing input.
+    #[must_use]
+    pub const fn retryable(&self) -> bool {
+        match self {
+            Self::Source(_) => false,
+            Self::Ipc(error) => matches!(
+                error,
+                IpcError::ConnectionFailed | IpcError::Timeout | IpcError::TransportFailure
+            ),
+            Self::Rejected(error) => error.retryable(),
+        }
+    }
+}
+
+/// Fixture-gated Codex task-completion normalizer and local IPC client.
+#[derive(Clone, Debug)]
+pub struct TaskCompletedEmitter {
+    adapter: TaskCompletedAdapter,
+    context: TaskCompletedContext,
+    client: IpcClient,
+}
+
+impl TaskCompletedEmitter {
+    /// Selects the exact versioned CLI hook adapter and local endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EmitError::Source`] when `codex_version` has no verified
+    /// task-completion fixture.
+    pub fn new(
+        codex_version: &str,
+        endpoint: IpcEndpoint,
+        context: TaskCompletedContext,
+        ipc_policy: IpcPolicy,
+    ) -> Result<Self, EmitError> {
+        let version = codex_version.parse::<CodexCliVersion>()?;
+        let adapter = TaskCompletedAdapter::new(version, CodexInterface::CliHook)?;
+        Ok(Self {
+            adapter,
+            context,
+            client: IpcClient::new(endpoint, ipc_policy),
+        })
+    }
+
+    /// Normalizes one bounded hook payload and submits it to the local agent.
+    ///
+    /// A fresh `UUIDv7` and receive time are assigned before any IPC attempt.
+    ///
+    /// # Errors
+    ///
+    /// Returns a source compatibility error, local IPC error, or validated
+    /// agent rejection. Error display text never contains input data.
+    pub async fn emit(&self, input: &[u8]) -> Result<Acknowledgement, EmitError> {
+        let received_at = OffsetDateTime::now_utc();
+        let event = self
+            .adapter
+            .normalize(input, &self.context, EventId::new_v7(), received_at)?;
+        let acknowledgement = self.client.submit(&event).await?;
+        if acknowledgement.status() == AckStatus::Rejected {
+            let error = acknowledgement
+                .error()
+                .cloned()
+                .ok_or(IpcError::MalformedAcknowledgement)?;
+            return Err(EmitError::Rejected(error));
+        }
+        Ok(acknowledgement)
+    }
+}
 
 /// Stable composition failures that do not expose paths or payloads.
 #[derive(Debug, Error)]

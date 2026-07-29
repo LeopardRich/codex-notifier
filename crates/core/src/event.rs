@@ -39,6 +39,12 @@ const ROUTING_FIELDS: &[&str] = &["profile"];
 pub struct EventId(Uuid);
 
 impl EventId {
+    /// Generates a new `UUIDv7` at first ingestion.
+    #[must_use]
+    pub fn new_v7() -> Self {
+        Self(Uuid::now_v7())
+    }
+
     /// Validates an existing UUID as version 7.
     ///
     /// # Errors

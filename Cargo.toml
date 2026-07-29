@@ -23,6 +23,7 @@ interprocess = { version = "2.4.2", features = ["tokio"] }
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
+sha2 = "0.10.9"
 rusqlite = { version = "0.37.0", features = ["bundled"] }
 sysinfo = { version = "0.36.1", default-features = false, features = ["system"] }
 thiserror = "2.0.12"
@@ -30,7 +31,7 @@ time = { version = "0.3.41", features = ["formatting", "parsing"] }
 tokio = { version = "1.46.1", features = ["io-util", "macros", "rt-multi-thread", "sync", "time"] }
 toml = "0.9.5"
 unicode-normalization = "0.1.24"
-uuid = "1.16.0"
+uuid = { version = "1.16.0", features = ["v7"] }
 widestring = "1.2.0"
 
 [workspace.dependencies.tempfile]
