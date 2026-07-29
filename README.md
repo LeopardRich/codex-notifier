@@ -15,11 +15,13 @@ notifications, including events produced by Codex running on a remote server.
 > drain are also complete. Exact Codex CLI 0.144.5 adapters now cover the CLI
 > `Stop` hook and app-server command-approval request, with bounded local
 > `emit` paths and read-only capability reporting. The Windows WinRT adapter,
-> policy mapping, diagnostics, and automated contracts are implemented, but a
-> product-identity Toast smoke test is still unverified. The macOS
-> UserNotifications adapter, bundle contract, authorization diagnostics, and
-> automated contracts are implemented in the Stage 13 tree; final macOS CI and
-> real notification tests are still pending. SSH has not been implemented yet.
+> policy mapping, diagnostics, and automated contracts are implemented;
+> product-identity Toast delivery and real disabled, Focus Assist, missing
+> identity, and Session 0 states are verified on Windows 10 22H2, while Windows
+> 11 remains unverified. The macOS UserNotifications adapter, bundle contract,
+> authorization diagnostics, native CI, and headless checks are implemented;
+> real interactive notification tests are still pending. SSH has not been
+> implemented yet.
 
 The implementation sequence and acceptance gates are defined in
 [`stages.md`](stages.md).
@@ -319,9 +321,10 @@ ownership contract is recorded in
 
 The adapter's automated contracts pass on Windows 10 22H2. A temporary
 per-user unpackaged-app registration using the product AUMID passed the ignored
-two-event smoke test: WinRT accepted both real Toasts. User visual confirmation,
-Windows 11 smoke testing, and real system-setting state checks remain
-outstanding. See
+two-event smoke test: WinRT accepted both real Toasts and the Windows
+notification database persisted their exact fixed private payloads. Real
+application-disabled and Focus Assist Priority-only states were exercised and
+restored. Windows 11 smoke testing remains outstanding. See
 [`docs/verification/stage-12.md`](docs/verification/stage-12.md).
 
 ### macOS native notifications

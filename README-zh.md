@@ -11,10 +11,11 @@ Codex 事件转换为 Windows 或 macOS 原生系统通知，并支持 Codex 运
 > 建立，事务性 SQLite 发件箱/去重存储、有界的用户级本地 IPC、角色感知 agent
 > 生命周期、持久背压和有界 worker 排空也已完成；Codex CLI 0.144.5 的 CLI
 > `Stop` hook 与 app-server 命令审批请求均已有精确适配器、有界本地 `emit` 路径和
-> 只读能力报告。Windows WinRT 适配器、策略映射、诊断与自动化契约已经实现，但
-> 产品身份 Toast 的真实冒烟测试仍未验证。阶段 13 工作树已实现 macOS
-> UserNotifications 适配器、应用包契约、授权诊断与自动化契约，但最终 macOS CI
-> 和真实通知测试仍待完成。SSH 尚未实现。
+> 只读能力报告。Windows WinRT 适配器、策略映射、诊断与自动化契约已经实现；产品
+> 身份 Toast 投递以及真实的应用级关闭、专注助手、身份缺失和 Session 0 状态已在
+> Windows 10 22H2 验证，Windows 11 尚未验证。macOS UserNotifications 适配器、
+> 应用包契约、授权诊断、原生 CI 与无图形会话检查已经实现，真实交互式通知测试仍待
+> 完成。SSH 尚未实现。
 
 实施顺序与各阶段验收门槛见 [`stages.md`](stages.md)。
 
@@ -279,8 +280,9 @@ Toast API 没有暴露的活动状态。打包资源和可回滚所有权契约�
 [`packaging/windows/README.md`](packaging/windows/README.md)。
 
 适配器自动化契约已在 Windows 10 22H2 通过。使用产品 AUMID 创建临时的当前用户
-非打包应用注册后，被忽略的双事件冒烟测试已经通过，WinRT 接受了两条真实 Toast。
-用户视觉确认、Windows 11 冒烟测试和真实系统设置状态检查仍未完成。详见
+非打包应用注册后，被忽略的双事件冒烟测试已经通过：WinRT 接受了两条真实 Toast，
+Windows 通知数据库也保存了两条准确的固定私密载荷。真实的应用级关闭和专注助手
+“仅优先通知”状态均已测试并恢复。Windows 11 冒烟测试仍未完成。详见
 [`docs/verification/stage-12.md`](docs/verification/stage-12.md)。
 
 ### macOS 原生通知
