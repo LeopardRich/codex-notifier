@@ -170,7 +170,10 @@ pub async fn install(codex_version: &str) -> Result<InstallReport, InstallerErro
         restore_documents(platform_paths.lifecycle(), &new_manifest, previous.as_ref())?;
         return Err(InstallerError::AgentStart);
     }
-    transaction.commit()?;
+    commit_or_restore(
+        || transaction.commit(),
+        || restore_documents(platform_paths.lifecycle(), &new_manifest, previous.as_ref()),
+    )?;
 
     request_macos_authorization_if_needed();
     let notification = notification_diagnostic(&config)?;
@@ -253,6 +256,18 @@ fn restore_documents(
             previous.hook_group().clone(),
             previous.platform().clone(),
         )?;
+    }
+    Ok(())
+}
+
+fn commit_or_restore<C, R>(commit: C, restore: R) -> Result<(), InstallerError>
+where
+    C: FnOnce() -> Result<(), PlatformError>,
+    R: FnOnce() -> Result<(), InstallerError>,
+{
+    if let Err(error) = commit() {
+        restore()?;
+        return Err(error.into());
     }
     Ok(())
 }
@@ -380,6 +395,7 @@ const fn request_macos_authorization_if_needed() {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
     fn hook_command_never_contains_unquoted_event_data() {
@@ -397,6 +413,24 @@ mod tests {
         assert!(windows.is_none());
         #[cfg(windows)]
         assert!(windows.is_some());
+    }
+
+    #[test]
+    fn failed_platform_commit_restores_managed_documents() {
+        let restored = AtomicBool::new(false);
+        let result = commit_or_restore(
+            || Err(PlatformError::FileSystem),
+            || {
+                restored.store(true, Ordering::SeqCst);
+                Ok(())
+            },
+        );
+
+        assert!(matches!(
+            result,
+            Err(InstallerError::Platform(PlatformError::FileSystem))
+        ));
+        assert!(restored.load(Ordering::SeqCst));
     }
 
     #[cfg(windows)]

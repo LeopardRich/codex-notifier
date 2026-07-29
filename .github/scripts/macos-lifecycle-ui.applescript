@@ -34,7 +34,7 @@ on run
         repeat with candidateProcess in application processes
             try
                 set processName to name of candidateProcess as text
-                if processName is "NotificationCenter" or processName is "UserNotificationCenter" or processName is "System Settings" then
+                if processName is "NotificationCenter" or (processName is "UserNotificationCenter" and screenPressed is not "1") or (processName is "System Settings" and bannerPressed is "1" and (settingsAllowPressed is not "1" or settingsAppPressed is not "1")) then
                     repeat with candidateWindow in windows of candidateProcess
                         set candidateElements to entire contents of candidateWindow
                         set windowText to ""

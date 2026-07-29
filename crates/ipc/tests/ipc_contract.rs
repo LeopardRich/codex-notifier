@@ -197,7 +197,16 @@ async fn stale_owned_socket_recovers_but_unrelated_file_is_preserved() {
     std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
         .expect("secure stale socket permissions");
     drop(stale);
-    let server = IpcServer::bind(endpoint.clone(), IpcPolicy::default()).expect("recover stale");
+    let deadline = std::time::Instant::now() + StdDuration::from_secs(1);
+    let server = loop {
+        match IpcServer::bind(endpoint.clone(), IpcPolicy::default()) {
+            Ok(server) => break server,
+            Err(IpcError::AlreadyRunning) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(StdDuration::from_millis(10));
+            }
+            result => panic!("recover stale: {result:?}"),
+        }
+    };
     drop(server);
 
     std::fs::write(&socket_path, b"unrelated").expect("unrelated file");

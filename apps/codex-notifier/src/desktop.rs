@@ -177,7 +177,25 @@ pub async fn submit_local_test(kind: EventKind) -> Result<(EventId, AckStatus), 
 ///
 /// Returns unsupported platform when no desktop backend exists.
 pub fn notification_diagnostic(config: &Config) -> Result<NotificationDiagnostic, DesktopError> {
-    Ok(native_adapter(config)?.diagnose())
+    #[cfg(windows)]
+    {
+        const DIAGNOSTIC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+        let policy = notification_policy(config);
+        match run_bounded(DIAGNOSTIC_TIMEOUT, move || {
+            native_adapter_for_policy(policy).map(|adapter| adapter.diagnose())
+        }) {
+            Some(result) => result,
+            None => Ok(NotificationDiagnostic::new(
+                codex_notifier_native_notification::NotificationStatus::Unavailable,
+                codex_notifier_native_notification::FocusStatus::Unknown,
+            )),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(native_adapter(config)?.diagnose())
+    }
 }
 
 /// Reads the bounded agent status record and validates its process ID.
@@ -305,6 +323,7 @@ impl RoleDeliveryFactory for NativeRoleFactory {
     }
 }
 
+#[cfg(not(windows))]
 fn native_adapter(config: &Config) -> Result<NativeNotificationAdapter, DesktopError> {
     native_adapter_for_policy(notification_policy(config))
 }
@@ -390,6 +409,19 @@ impl Drop for AgentStatusGuard {
 fn process_exists(pid: u32) -> bool {
     let system = sysinfo::System::new_all();
     system.process(sysinfo::Pid::from_u32(pid)).is_some()
+}
+
+#[cfg(any(windows, test))]
+fn run_bounded<T, F>(timeout: std::time::Duration, operation: F) -> Option<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let _ = sender.send(operation());
+    });
+    receiver.recv_timeout(timeout).ok()
 }
 
 fn read_bounded(path: &Path) -> Result<String, DesktopError> {
@@ -500,5 +532,17 @@ mod tests {
         let status = read_agent_status(directory.path());
         assert!(!status.running);
         assert!(status.stale);
+    }
+
+    #[test]
+    fn bounded_operation_returns_results_and_times_out() {
+        let ready = run_bounded(std::time::Duration::from_secs(1), || 7);
+        assert_eq!(ready, Some(7));
+
+        let timed_out = run_bounded(std::time::Duration::from_millis(1), || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            9
+        });
+        assert_eq!(timed_out, None);
     }
 }
