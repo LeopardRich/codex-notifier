@@ -288,7 +288,9 @@ Windows 通知数据库也保存了两条准确的固定私密载荷。真实的
 ### macOS 原生通知
 
 macOS 适配器只在 `cfg(target_os = "macos")` 下编译，通过安全 Rust 绑定调用 Apple
-现代 UserNotifications 框架。它要求签名应用包使用固定标识
+现代 UserNotifications 框架，并精确固定到能够使用 macOS 14 SDK 构建的绑定版本；
+原生 CI 现已同时覆盖 macOS 14 与当前 `macos-latest` 镜像。它要求签名应用包使用
+固定标识
 `io.github.leopardrich.codex-notifier`，校验可执行文件确实从该 `.app` 内运行，并
 要求当前用户存在 Aqua launch domain。只读诊断会区分应用身份缺失、尚未请求授权、
 明确拒绝或应用级关闭、无 GUI 会话以及原生 API 不可用。授权只能通过显式方法请求；
@@ -302,8 +304,8 @@ passive level。适配器绝不使用会绕过专注模式的 time-sensitive 或
 
 应用包、Developer ID 签名、公证与 Aqua LaunchAgent 的资源契约见
 [`packaging/macos/README.md`](packaging/macos/README.md)。被忽略的冒烟测试会自行
-构造并临时签名测试应用包，显式请求授权，然后提交两类事件。macOS 14 与最新支持
-版本上的真实视觉确认仍未验证；详见
+构造并临时签名测试应用包，向 LaunchServices 注册后作为应用启动，显式请求授权，
+然后提交两类事件。macOS 14 与最新支持版本上的真实视觉确认仍未验证；详见
 [`docs/verification/stage-13.md`](docs/verification/stage-13.md)。
 
 ## 安全模型

@@ -80,6 +80,16 @@ Scope: Windows native Toast adapter and diagnostics.
   ran the ignored non-interactive diagnostic from a temporary SYSTEM scheduled
   task. The real Session 0 process reported `no_interactive_session`, and the
   task was unregistered in the workflow's cleanup path.
+- A bounded hosted-runner probe in GitHub Actions run
+  [`30444848179`](https://github.com/LeopardRich/codex-notifier/actions/runs/30444848179)
+  exercised Windows 11 Enterprise build 26200 on Arm64 in interactive Session
+  2. It completed the first-login privacy UI and reached a real desktop, then
+  verified the product AUMID in a Start Menu shortcut, the per-user identity
+  key, an existing PNG icon, and running Wpn services. Both shortcut-launched
+  and direct product tests still reported `application_identity_missing` and
+  submitted no Toast. The workflow's green conclusion only reflects bounded
+  evidence collection; this failed inner smoke is not Windows 11 support
+  evidence.
 - All temporary Start Menu shortcuts and unpackaged-app registration values
   were removed. The Windows-owned notification-history key was retained, and
   the Settings window and local test server were closed. No user startup item

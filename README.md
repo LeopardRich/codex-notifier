@@ -331,6 +331,8 @@ restored. Windows 11 smoke testing remains outstanding. See
 
 The macOS adapter is compiled only under `cfg(target_os = "macos")` and uses
 Apple's modern UserNotifications framework through safe Rust bindings. It
+pins the binding release that builds against the macOS 14 SDK; native CI now
+covers both macOS 14 and the current `macos-latest` image. The adapter
 requires the signed application bundle identifier
 `io.github.leopardrich.codex-notifier`, verifies that the executable is running
 from that `.app`, and requires the current user's Aqua launch domain. A
@@ -350,9 +352,10 @@ authoritative and diagnostics report `system_managed`.
 The bundle, Developer ID signing, notarization, and Aqua LaunchAgent resource
 contract is recorded in
 [`packaging/macos/README.md`](packaging/macos/README.md). An ignored smoke test
-self-bundles and ad-hoc signs the test executable, explicitly requests
-authorization, and submits both event kinds. Real visual confirmation on macOS
-14 and the latest supported macOS remains unverified; see
+self-bundles and ad-hoc signs the test executable, registers it with
+LaunchServices, launches it as an application, explicitly requests
+authorization, and submits both event kinds. Real visual confirmation on
+macOS 14 and the latest supported macOS remains unverified; see
 [`docs/verification/stage-13.md`](docs/verification/stage-13.md).
 
 ## Security Model

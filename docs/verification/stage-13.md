@@ -12,8 +12,11 @@ and packaging resources.
 - The implementation and all native dependencies are selected only under
   `cfg(target_os = "macos")`; other targets do not link or initialize them.
 - The backend uses Apple's modern UserNotifications framework through the safe
-  `usernotifications-rs` facade. Deprecated `NSUserNotification`, `osascript`,
-  bundle-identity spoofing, and hand-written unsafe shims are not used.
+  `usernotifications-rs` facade. Version `0.2.0` is pinned exactly because
+  `0.3.7` references a macOS 15-only SDK type while compiling its Swift bridge
+  and fails against the supported macOS 14 SDK. Deprecated
+  `NSUserNotification`, `osascript`, bundle-identity spoofing, and hand-written
+  unsafe shims are not used.
 - The fixed bundle identifier is `io.github.leopardrich.codex-notifier`. The
   backend requires that exact identifier, a `.app` main bundle, and the current
   user's Aqua launch domain.
@@ -28,11 +31,12 @@ and packaging resources.
   framework denial mapping, display-only content, and active/passive
   interruption levels that never bypass Focus.
 - The ignored `macos_smoke` test creates and ad-hoc signs a temporary product-ID
-  app bundle, explicitly requests permission, then submits both real event
-  kinds. A separate native test proves a bare executable reports missing
-  identity, and an ignored headless test relaunches the signed bundle without
-  an Aqua launch domain. Normal test runs cannot display notifications or
-  prompt for access.
+  app bundle, registers it with LaunchServices, launches it as an application,
+  explicitly requests permission, and verifies an inner success marker after
+  submitting both real event kinds. A separate native test proves a bare
+  executable reports missing identity, and an ignored headless test relaunches
+  the signed bundle without an Aqua launch domain. Normal test runs cannot
+  display notifications or prompt for access.
 - Packaging documentation freezes the Info.plist, icon, Developer ID signing,
   notarization, Aqua LaunchAgent, upgrade, uninstall, and ownership resources.
 
@@ -41,7 +45,7 @@ and packaging resources.
 - `cargo fmt --all -- --check`, locked metadata, and `git diff --check` pass.
 - On the final combined Stage 12/13 tree, Rust 1.88 GNU full-workspace Clippy
   passes with all targets, all features, and warnings denied. The workspace
-  suite passes 87 automated tests; the two Windows real-state tests stay
+  suite passes 87 automated tests; the four Windows real-state tests stay
   explicitly ignored, and the macOS-only smoke target is empty on Windows.
 - On Windows 10 22H2, focused Rust 1.88 GNU `cargo check` and all-targets,
   all-features Clippy with warnings denied pass for the native notification
@@ -72,6 +76,24 @@ and packaging resources.
   inner test as `nobody`; the resulting process had no Aqua launch domain and
   reported `no_gui_session`. The same native run also passed the non-bundled
   missing-identity test. No notification permission was requested.
+- GitHub Actions run
+  [`30445395390`](https://github.com/LeopardRich/codex-notifier/actions/runs/30445395390)
+  for commit `fc88b38be573326c37b0620c7ddcf048562b4379` passed all four
+  blocking jobs. Native macOS 14 and current `macos-latest` runners both built
+  the pinned Swift bridge and Apple frameworks, passed formatting,
+  warnings-as-errors Clippy and normal workspace tests, and passed the signed
+  no-Aqua diagnostic. This closes the minimum-SDK build gap but is not an
+  interactive authorization or display claim.
+- A bounded hosted interactive probe in run
+  [`30444848179`](https://github.com/LeopardRich/codex-notifier/actions/runs/30444848179)
+  used real console/Aqua sessions on macOS 14.8.7 and macOS 26.4. Moving the
+  ad-hoc signed bundle under `/Applications` and registering it changed the
+  native result from immediate `UNErrorDomain:1` rejection to an authorization
+  request waiting for user input. The hosted desktop exposed neither the system
+  prompt nor an automatable application UI, so the bounded probe terminated
+  the inner test without a grant. Its green workflow conclusion represents
+  artifact collection only and is not authorization, denial, Focus, or display
+  evidence.
 
 ## Required before completion
 
