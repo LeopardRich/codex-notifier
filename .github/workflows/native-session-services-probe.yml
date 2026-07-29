@@ -569,14 +569,25 @@ jobs:
           sleep 2
           screencapture -x target/macos-before.png \
             2>target/macos-before-error.txt
-          clicked=''
+          notification_clicked=''
+          banner_hovered=''
+          banner_pressed=''
+          screen_pressed=''
           for attempt in $(seq 1 80); do
             CODEX_PROBE_SCREENSHOT="$PWD/target/macos-permission-prompt.png" \
               CODEX_PROBE_CLICK_HELPER="$PWD/target/macos-probe-click" \
+              CODEX_PROBE_NOTIFICATION_CLICKED="$notification_clicked" \
+              CODEX_PROBE_BANNER_HOVERED="$banner_hovered" \
+              CODEX_PROBE_BANNER_PRESSED="$banner_pressed" \
+              CODEX_PROBE_SCREEN_PRESSED="$screen_pressed" \
               osascript >target/macos-ui-current.txt 2>&1 <<'APPLESCRIPT'
           tell application "System Events"
               set observations to ""
               set clickHelper to system attribute "CODEX_PROBE_CLICK_HELPER"
+              set notificationClicked to system attribute "CODEX_PROBE_NOTIFICATION_CLICKED"
+              set bannerHovered to system attribute "CODEX_PROBE_BANNER_HOVERED"
+              set bannerPressed to system attribute "CODEX_PROBE_BANNER_PRESSED"
+              set screenPressed to system attribute "CODEX_PROBE_SCREEN_PRESSED"
               repeat with candidateProcess in application processes
                   try
                       set processName to name of candidateProcess as text
@@ -597,12 +608,12 @@ jobs:
                               if processName is "UserNotificationCenter" and windowText contains "screen and audio" then
                                   repeat with candidateElement in candidateElements
                                       try
-                                          if role of candidateElement is "AXButton" and name of candidateElement is "Allow" then
+                                          if screenPressed is not "1" and role of candidateElement is "AXButton" and name of candidateElement is "Allow" then
                                               set buttonPosition to position of candidateElement
                                               set buttonSize to size of candidateElement
                                               set clickX to (item 1 of buttonPosition) + ((item 1 of buttonSize) div 2)
                                               set clickY to (item 2 of buttonPosition) + ((item 2 of buttonSize) div 2)
-                                              do shell script quoted form of clickHelper & " " & clickX & " " & clickY
+                                              do shell script quoted form of clickHelper & " click " & clickX & " " & clickY
                                               return "pressed=screen-coordinate x=" & clickX & " y=" & clickY
                                           end if
                                       end try
@@ -611,14 +622,14 @@ jobs:
                               if windowText contains "Codex Notifier" and windowText contains "Notifications" then
                                   repeat with candidateElement in candidateElements
                                       try
-                                          if role of candidateElement is "AXButton" and name of candidateElement is "Allow" then
+                                          if notificationClicked is not "1" and role of candidateElement is "AXButton" and name of candidateElement is "Allow" then
                                               set screenshotPath to system attribute "CODEX_PROBE_SCREENSHOT"
                                               do shell script "/usr/sbin/screencapture -x " & quoted form of screenshotPath
                                               set buttonPosition to position of candidateElement
                                               set buttonSize to size of candidateElement
                                               set clickX to (item 1 of buttonPosition) + ((item 1 of buttonSize) div 2)
                                               set clickY to (item 2 of buttonPosition) + ((item 2 of buttonSize) div 2)
-                                              do shell script quoted form of clickHelper & " " & clickX & " " & clickY
+                                              do shell script quoted form of clickHelper & " click " & clickX & " " & clickY
                                               return "clicked=notification process=" & processName & " text=" & windowText
                                           end if
                                       end try
@@ -632,14 +643,18 @@ jobs:
                                           try
                                               set elementText to elementText & " " & (value of candidateElement as text)
                                           end try
-                                          if elementText contains "Codex Notifier" or elementText contains "Notifications may include" then
+                                          if bannerPressed is not "1" and (elementText contains "Codex Notifier" or elementText contains "Notifications may include") then
                                               set screenshotPath to system attribute "CODEX_PROBE_SCREENSHOT"
                                               do shell script "/usr/sbin/screencapture -x " & quoted form of screenshotPath
                                               set elementPosition to position of candidateElement
                                               set elementSize to size of candidateElement
                                               set clickX to (item 1 of elementPosition) + ((item 1 of elementSize) div 2)
                                               set clickY to (item 2 of elementPosition) + ((item 2 of elementSize) div 2)
-                                              do shell script quoted form of clickHelper & " " & clickX & " " & clickY
+                                              if bannerHovered is not "1" then
+                                                  do shell script quoted form of clickHelper & " move " & clickX & " " & clickY
+                                                  return "hovered=banner-coordinate process=" & processName & " x=" & clickX & " y=" & clickY & " element=" & elementText
+                                              end if
+                                              do shell script quoted form of clickHelper & " click " & clickX & " " & clickY
                                               return "pressed=banner-coordinate process=" & processName & " x=" & clickX & " y=" & clickY & " element=" & elementText
                                           end if
                                       end try
@@ -657,8 +672,23 @@ jobs:
             cat target/macos-ui-current.txt >target/macos-ui.txt
             cat target/macos-ui-current.txt >>target/macos-ui-history.txt
             if grep -q '^clicked=' target/macos-ui-current.txt; then
-              clicked=1
+              notification_clicked=1
               break
+            fi
+            if grep -q '^pressed=screen-coordinate' target/macos-ui-current.txt; then
+              screen_pressed=1
+              sleep 1
+              continue
+            fi
+            if grep -q '^hovered=banner-coordinate' target/macos-ui-current.txt; then
+              banner_hovered=1
+              sleep 2
+              continue
+            fi
+            if grep -q '^pressed=banner-coordinate' target/macos-ui-current.txt; then
+              banner_pressed=1
+              sleep 2
+              continue
             fi
             if ! kill -0 "$smoke_pid" 2>/dev/null; then
               break
@@ -678,7 +708,7 @@ jobs:
             sleep 0.5
           done
           if [[ -z "$result" ]]; then
-            echo "Smoke timed out clicked=$clicked" >>target/macos-smoke.log
+            echo "Smoke timed out notification_clicked=$notification_clicked banner_hovered=$banner_hovered banner_pressed=$banner_pressed screen_pressed=$screen_pressed" >>target/macos-smoke.log
             kill "$smoke_pid" 2>/dev/null
             pkill -f codex-notifier-macos-smoke 2>/dev/null
             wait "$smoke_pid" 2>/dev/null

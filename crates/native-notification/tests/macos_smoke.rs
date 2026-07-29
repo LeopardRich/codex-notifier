@@ -168,10 +168,12 @@ mod macos {
         loop {
             match receiver.try_recv() {
                 Ok((granted, error_free)) => {
-                    assert!(
-                        error_free,
-                        "macOS notification authorization returned an error"
-                    );
+                    if !error_free {
+                        let diagnostic = MacOsNotificationBackend::codex_notifier().diagnose();
+                        panic!(
+                            "macOS notification authorization returned an error; diagnostic={diagnostic:?}"
+                        );
+                    }
                     assert!(granted, "macOS notification authorization must be granted");
                     break;
                 }
