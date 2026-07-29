@@ -135,8 +135,7 @@ fn run_doctor(command: &DoctorCommand) {
     let report = CodexCapabilityReport::inspect(&command.codex_version, command.interface);
     let version = report
         .version()
-        .map(CodexCliVersion::as_str)
-        .unwrap_or("unsupported");
+        .map_or("unsupported", CodexCliVersion::as_str);
     println!(
         "codex_version={version}\ninterface={}\ntask_completed={}\napproval_requested={}\napproval_installation={}\napproval_notice={}",
         report.interface().as_str(),
