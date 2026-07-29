@@ -175,6 +175,27 @@ impl Acknowledgement {
         self.error.as_ref()
     }
 
+    /// Decodes and validates one bounded protocol-v1 acknowledgement.
+    ///
+    /// # Errors
+    ///
+    /// Returns a frame or acknowledgement error for oversized input, invalid
+    /// JSON, unknown fields, inconsistent status/error state, or unsafe error
+    /// content.
+    pub fn from_json(bytes: &[u8]) -> Result<Self, IpcError> {
+        Self::from_bytes(bytes)
+    }
+
+    /// Encodes one validated bounded protocol-v1 acknowledgement.
+    ///
+    /// # Errors
+    ///
+    /// Returns a frame or acknowledgement error if the value violates the
+    /// frozen acknowledgement contract.
+    pub fn to_json(&self) -> Result<Vec<u8>, IpcError> {
+        self.to_bytes()
+    }
+
     pub(crate) fn to_bytes(&self) -> Result<Vec<u8>, IpcError> {
         self.validate()?;
         let bytes = serde_json::to_vec(self).map_err(|_| IpcError::MalformedAcknowledgement)?;

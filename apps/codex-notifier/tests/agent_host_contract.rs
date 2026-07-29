@@ -12,8 +12,8 @@ use codex_notifier::{
 };
 use codex_notifier_application::{
     AgentError, AgentLease, AgentPolicy, AgentQueue, AgentQueueError, AgentRuntime, AgentState,
-    CancellationToken, DeliveryFuture, DeliveryOutcome, EnqueueResult, EventDelivery,
-    RoleDeliveryFactory, RuntimeRole, SafeErrorCode,
+    CancellationToken, DeliveryFailure, DeliveryFuture, DeliveryOutcome, EnqueueResult,
+    EventDelivery, RetryResult, RoleDeliveryFactory, RuntimeRole, SafeErrorCode,
 };
 use codex_notifier_codex_source::{ApprovalRequestedContext, SourceError, TaskCompletedContext};
 use codex_notifier_config::{
@@ -70,6 +70,8 @@ fn endpoint(directory: &TempDir) -> IpcEndpoint {
 
 struct TestDelivery {
     cancel_aware: bool,
+    retryable_failures: AtomicUsize,
+    attempts: AtomicUsize,
     active: AtomicUsize,
     delivered: AtomicUsize,
 }
@@ -78,6 +80,8 @@ impl TestDelivery {
     fn immediate() -> Self {
         Self {
             cancel_aware: false,
+            retryable_failures: AtomicUsize::new(0),
+            attempts: AtomicUsize::new(0),
             active: AtomicUsize::new(0),
             delivered: AtomicUsize::new(0),
         }
@@ -86,6 +90,28 @@ impl TestDelivery {
     fn cancel_aware() -> Self {
         Self {
             cancel_aware: true,
+            retryable_failures: AtomicUsize::new(0),
+            attempts: AtomicUsize::new(0),
+            active: AtomicUsize::new(0),
+            delivered: AtomicUsize::new(0),
+        }
+    }
+
+    fn retry_once() -> Self {
+        Self {
+            cancel_aware: false,
+            retryable_failures: AtomicUsize::new(1),
+            attempts: AtomicUsize::new(0),
+            active: AtomicUsize::new(0),
+            delivered: AtomicUsize::new(0),
+        }
+    }
+
+    fn always_retry() -> Self {
+        Self {
+            cancel_aware: false,
+            retryable_failures: AtomicUsize::new(usize::MAX),
+            attempts: AtomicUsize::new(0),
             active: AtomicUsize::new(0),
             delivered: AtomicUsize::new(0),
         }
@@ -99,11 +125,24 @@ impl EventDelivery for TestDelivery {
         cancellation: CancellationToken,
     ) -> DeliveryFuture<'a> {
         Box::pin(async move {
+            self.attempts.fetch_add(1, Ordering::AcqRel);
             self.active.fetch_add(1, Ordering::AcqRel);
             if self.cancel_aware {
                 cancellation.cancelled().await;
                 self.active.fetch_sub(1, Ordering::AcqRel);
                 DeliveryOutcome::Cancelled
+            } else if self
+                .retryable_failures
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                    value.checked_sub(1)
+                })
+                .is_ok()
+            {
+                self.active.fetch_sub(1, Ordering::AcqRel);
+                DeliveryOutcome::Failed(DeliveryFailure::new(
+                    SafeErrorCode::parse("ssh_network_unavailable").expect("safe error code"),
+                    true,
+                ))
             } else {
                 self.delivered.fetch_add(1, Ordering::AcqRel);
                 self.active.fetch_sub(1, Ordering::AcqRel);
@@ -197,7 +236,7 @@ impl AgentQueue for MemoryQueue {
             .lock()
             .map_err(|_| AgentQueueError::Unavailable)?
             .insert(token.clone(), event.clone());
-        AgentLease::new(event, token).map(Some)
+        AgentLease::new(event, token, 1).map(Some)
     }
 
     fn acknowledge(&self, lease: &AgentLease) -> Result<(), AgentQueueError> {
@@ -209,8 +248,13 @@ impl AgentQueue for MemoryQueue {
         Ok(())
     }
 
-    fn retry(&self, lease: &AgentLease, code: &SafeErrorCode) -> Result<(), AgentQueueError> {
-        self.release(lease, code)
+    fn retry(
+        &self,
+        lease: &AgentLease,
+        code: &SafeErrorCode,
+    ) -> Result<RetryResult, AgentQueueError> {
+        self.release(lease, code)?;
+        Ok(RetryResult::Scheduled)
     }
 
     fn release(&self, lease: &AgentLease, _code: &SafeErrorCode) -> Result<(), AgentQueueError> {
@@ -340,6 +384,15 @@ impl StateDirectoryProbe for WritableProbe {
 }
 
 fn config(directory: &TempDir, role: &str, profile: &str) -> Config {
+    config_with_user(directory, role, profile, None)
+}
+
+fn config_with_user(
+    directory: &TempDir,
+    role: &str,
+    profile: &str,
+    user_toml: Option<&str>,
+) -> Config {
     #[cfg(windows)]
     let paths = PathEnvironment::new()
         .with_windows_app_data(directory.path())
@@ -366,7 +419,7 @@ fn config(directory: &TempDir, role: &str, profile: &str) -> Config {
     if role == "relay" {
         cli = cli.with_relay_host("desktop-test");
     }
-    ConfigLoader::load(&paths, None, None, cli, &WritableProbe).expect("configuration")
+    ConfigLoader::load(&paths, user_toml, None, cli, &WritableProbe).expect("configuration")
 }
 
 async fn wait_ready(runtime: &AgentRuntime) {
@@ -629,6 +682,98 @@ async fn validated_relay_config_initializes_only_relay_port() {
     let _host = AgentHost::from_config(&config, &factory).expect("relay host");
     assert_eq!(factory.desktop_calls.load(Ordering::Acquire), 0);
     assert_eq!(factory.relay_calls.load(Ordering::Acquire), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn durable_relay_retry_wakes_at_backoff_and_then_acknowledges() {
+    let directory = test_directory();
+    let profile = format!(
+        "rr{}_{}",
+        std::process::id(),
+        NEXT_PROFILE.fetch_add(1, Ordering::Relaxed)
+    );
+    let config = config_with_user(
+        &directory,
+        "relay",
+        &profile,
+        Some(
+            "config_version = 1\n[relay]\nretry_initial_delay_ms = 100\nretry_max_delay_ms = 100\nretry_max_attempts = 3\n",
+        ),
+    );
+    let factory = TestFactory::new(TestDelivery::retry_once());
+    let host = AgentHost::from_config(&config, &factory).expect("relay host");
+    let runtime = host.runtime();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let runner = tokio::spawn(async move {
+        host.run_until(async {
+            let _ = shutdown_rx.await;
+        })
+        .await
+    });
+    wait_ready(&runtime).await;
+    let started = std::time::Instant::now();
+    assert_eq!(
+        runtime.submit(&event(90)),
+        Ok(codex_notifier_application::SubmissionOutcome::Accepted)
+    );
+    tokio::time::timeout(StdDuration::from_secs(2), async {
+        while factory.delivery.delivered.load(Ordering::Acquire) != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("retry recovery");
+    assert!(started.elapsed() >= StdDuration::from_millis(70));
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    shutdown_tx.send(()).expect("shutdown");
+    let report = runner.await.expect("runner").expect("host run");
+    assert_eq!(report.agent.retried, 1);
+    assert_eq!(report.agent.delivered, 1);
+    assert_eq!(report.agent.dead_lettered, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exhausted_relay_attempts_become_one_bounded_dead_letter() {
+    let directory = test_directory();
+    let profile = format!(
+        "rd{}_{}",
+        std::process::id(),
+        NEXT_PROFILE.fetch_add(1, Ordering::Relaxed)
+    );
+    let config = config_with_user(
+        &directory,
+        "relay",
+        &profile,
+        Some(
+            "config_version = 1\n[relay]\nretry_initial_delay_ms = 100\nretry_max_delay_ms = 100\nretry_max_attempts = 2\n",
+        ),
+    );
+    let factory = TestFactory::new(TestDelivery::always_retry());
+    let host = AgentHost::from_config(&config, &factory).expect("relay host");
+    let runtime = host.runtime();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let runner = tokio::spawn(async move {
+        host.run_until(async {
+            let _ = shutdown_rx.await;
+        })
+        .await
+    });
+    wait_ready(&runtime).await;
+    runtime.submit(&event(91)).expect("relay submission");
+    tokio::time::timeout(StdDuration::from_secs(2), async {
+        while factory.delivery.attempts.load(Ordering::Acquire) < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("attempt exhaustion");
+    tokio::time::sleep(StdDuration::from_millis(20)).await;
+    shutdown_tx.send(()).expect("shutdown");
+    let report = runner.await.expect("runner").expect("host run");
+    assert_eq!(factory.delivery.attempts.load(Ordering::Acquire), 2);
+    assert_eq!(report.agent.retried, 1);
+    assert_eq!(report.agent.delivered, 0);
+    assert_eq!(report.agent.dead_lettered, 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

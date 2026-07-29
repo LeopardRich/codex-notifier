@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use codex_notifier_application::{
     AgentError, AgentLease, AgentPolicy, AgentQueue, AgentQueueError, AgentRunReport, AgentRuntime,
-    EnqueueResult, RoleDeliveryFactory, RuntimeRole, SafeErrorCode, SubmissionOutcome,
+    EnqueueResult, RetryResult, RoleDeliveryFactory, RuntimeRole, SafeErrorCode, SubmissionOutcome,
 };
 use codex_notifier_codex_source::{
     ApprovalRequestedAdapter, ApprovalRequestedContext, CodexCliVersion, CodexInterface,
@@ -25,14 +25,56 @@ use codex_notifier_ipc::{
     AckError, AckStatus, Acknowledgement, IpcClient, IpcEndpoint, IpcError, IpcPolicy, IpcServer,
     ServeReport,
 };
-use codex_notifier_persistence::{EnqueueOutcome, PersistenceError, SqliteStore, StorePolicy};
+use codex_notifier_persistence::{
+    EnqueueOutcome, PersistenceError, RetryOutcome, SqliteStore, StorePolicy,
+};
 use thiserror::Error;
 use time::OffsetDateTime;
 use tokio::sync::watch;
 
 const DEFAULT_WORKERS: usize = 4;
 const DATABASE_FILE: &str = "events.sqlite3";
-const INITIAL_RETRY_DELAY_MS: i64 = 250;
+const DEFAULT_RETRY_INITIAL_DELAY_MS: u64 = 1_000;
+const DEFAULT_RETRY_MAX_DELAY_MS: u64 = 60_000;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RetrySchedule {
+    initial_delay_ms: u64,
+    max_delay_ms: u64,
+}
+
+impl RetrySchedule {
+    const fn new(initial_delay_ms: u64, max_delay_ms: u64) -> Result<Self, AgentError> {
+        if initial_delay_ms == 0 || initial_delay_ms > max_delay_ms {
+            return Err(AgentError::InvalidPolicy);
+        }
+        Ok(Self {
+            initial_delay_ms,
+            max_delay_ms,
+        })
+    }
+
+    fn delay_ms(self, attempt: u32) -> u64 {
+        let shift = attempt.saturating_sub(1).min(63);
+        let multiplier = 1_u64.checked_shl(shift).unwrap_or(u64::MAX);
+        let base = self
+            .initial_delay_ms
+            .saturating_mul(multiplier)
+            .min(self.max_delay_ms);
+        let jitter_window = base / 4;
+        let floor = base.saturating_sub(jitter_window);
+        floor.saturating_add(fastrand::u64(0..=jitter_window))
+    }
+}
+
+impl Default for RetrySchedule {
+    fn default() -> Self {
+        Self {
+            initial_delay_ms: DEFAULT_RETRY_INITIAL_DELAY_MS,
+            max_delay_ms: DEFAULT_RETRY_MAX_DELAY_MS,
+        }
+    }
+}
 
 /// Safe Codex event emission failures.
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
@@ -267,14 +309,24 @@ impl AgentHost {
         let endpoint = IpcEndpoint::new(state_dir.join("run"), endpoint_label)?;
         let server = IpcServer::bind(endpoint, IpcPolicy::default())?;
 
-        let store_policy =
-            StorePolicy::default().with_queue_limit(config.storage().max_queue_entries())?;
-        let store = SqliteStore::open(&state_dir.join(DATABASE_FILE), store_policy)?;
-        let queue: Arc<dyn AgentQueue> = Arc::new(SqliteAgentQueue::new(store));
         let role = match config.agent().role() {
             Role::Desktop => RuntimeRole::Desktop,
             Role::Relay => RuntimeRole::Relay,
         };
+        let mut store_policy =
+            StorePolicy::default().with_queue_limit(config.storage().max_queue_entries())?;
+        let retry_schedule = if role == RuntimeRole::Relay {
+            store_policy = store_policy.with_max_attempts(config.relay().retry_max_attempts())?;
+            RetrySchedule::new(
+                config.relay().retry_initial_delay_ms(),
+                config.relay().retry_max_delay_ms(),
+            )?
+        } else {
+            RetrySchedule::default()
+        };
+        let store = SqliteStore::open(&state_dir.join(DATABASE_FILE), store_policy)?;
+        let queue: Arc<dyn AgentQueue> =
+            Arc::new(SqliteAgentQueue::with_retry_schedule(store, retry_schedule));
         let shutdown_timeout = Duration::from_millis(config.agent().shutdown_timeout_ms());
         let policy = AgentPolicy::new(DEFAULT_WORKERS, shutdown_timeout)?;
         let runtime = AgentRuntime::compose(role, policy, queue, factory)?;
@@ -410,6 +462,7 @@ fn acknowledgement_for(
 pub struct SqliteAgentQueue {
     store: Mutex<SqliteStore>,
     next_lease: AtomicU64,
+    retry_schedule: RetrySchedule,
 }
 
 impl SqliteAgentQueue {
@@ -419,6 +472,18 @@ impl SqliteAgentQueue {
         Self {
             store: Mutex::new(store),
             next_lease: AtomicU64::new(0),
+            retry_schedule: RetrySchedule {
+                initial_delay_ms: DEFAULT_RETRY_INITIAL_DELAY_MS,
+                max_delay_ms: DEFAULT_RETRY_MAX_DELAY_MS,
+            },
+        }
+    }
+
+    const fn with_retry_schedule(store: SqliteStore, retry_schedule: RetrySchedule) -> Self {
+        Self {
+            store: Mutex::new(store),
+            next_lease: AtomicU64::new(0),
+            retry_schedule,
         }
     }
 
@@ -445,8 +510,28 @@ impl AgentQueue for SqliteAgentQueue {
         self.lock()?
             .lease_next(now_ms(), &token)
             .map_err(|error| map_persistence_error(&error))?
-            .map(|leased| AgentLease::new(leased.event().clone(), leased.lease_token()))
+            .map(|leased| {
+                AgentLease::new(
+                    leased.event().clone(),
+                    leased.lease_token(),
+                    leased.attempt(),
+                )
+            })
             .transpose()
+    }
+
+    fn next_wake(&self) -> Result<Option<Duration>, AgentQueueError> {
+        let now = now_ms();
+        self.lock()?
+            .next_available_at_ms(now)
+            .map_err(|error| map_persistence_error(&error))
+            .map(|available| {
+                available.map(|available| {
+                    Duration::from_millis(
+                        u64::try_from(available.saturating_sub(now)).unwrap_or_default(),
+                    )
+                })
+            })
     }
 
     fn acknowledge(&self, lease: &AgentLease) -> Result<(), AgentQueueError> {
@@ -455,9 +540,15 @@ impl AgentQueue for SqliteAgentQueue {
             .map_err(|error| map_persistence_error(&error))
     }
 
-    fn retry(&self, lease: &AgentLease, code: &SafeErrorCode) -> Result<(), AgentQueueError> {
+    fn retry(
+        &self,
+        lease: &AgentLease,
+        code: &SafeErrorCode,
+    ) -> Result<RetryResult, AgentQueueError> {
         let now = now_ms();
-        let available = now.saturating_add(INITIAL_RETRY_DELAY_MS);
+        let delay = i64::try_from(self.retry_schedule.delay_ms(lease.attempt()))
+            .map_err(|_| AgentQueueError::Corrupt)?;
+        let available = now.saturating_add(delay);
         self.lock()?
             .retry(
                 lease.event().event_id(),
@@ -466,7 +557,10 @@ impl AgentQueue for SqliteAgentQueue {
                 available,
                 code.as_str(),
             )
-            .map(|_| ())
+            .map(|outcome| match outcome {
+                RetryOutcome::Scheduled => RetryResult::Scheduled,
+                RetryOutcome::DeadLettered => RetryResult::DeadLettered,
+            })
             .map_err(|error| map_persistence_error(&error))
     }
 
@@ -526,4 +620,23 @@ fn now_ms() -> i64 {
 #[must_use]
 pub fn database_path(state_dir: &Path) -> std::path::PathBuf {
     state_dir.join(DATABASE_FILE)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retry_schedule_is_exponential_jittered_and_capped() {
+        let schedule = RetrySchedule::new(100, 800).expect("retry schedule");
+        for (attempt, base) in [(1, 100), (2, 200), (3, 400), (4, 800), (8, 800)] {
+            for _ in 0..64 {
+                let delay = schedule.delay_ms(attempt);
+                assert!(delay >= base - base / 4, "attempt {attempt}: {delay}");
+                assert!(delay <= base, "attempt {attempt}: {delay}");
+            }
+        }
+        assert_eq!(RetrySchedule::new(0, 100), Err(AgentError::InvalidPolicy));
+        assert_eq!(RetrySchedule::new(101, 100), Err(AgentError::InvalidPolicy));
+    }
 }

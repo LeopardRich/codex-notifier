@@ -72,6 +72,7 @@ dependencies = [
  "codex-notifier-native-notification",
  "codex-notifier-persistence",
  "codex-notifier-ssh-transport",
+ "fastrand",
  "serde",
  "serde_json",
  "sha2",
@@ -181,6 +182,7 @@ dependencies = [
 name = "codex-notifier-ssh-transport"
 version = "0.1.0"
 dependencies = [
+ "codex-notifier-application",
  "codex-notifier-core",
  "codex-notifier-ipc",
  "rustix",
@@ -188,6 +190,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "time",
+ "tokio",
 ]
 
 [[package]]

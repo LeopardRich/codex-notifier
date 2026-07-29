@@ -146,6 +146,9 @@ pub struct RelayConfig {
     pub(crate) ssh_host_alias: Option<String>,
     pub(crate) target_profile: String,
     pub(crate) connect_timeout_ms: u64,
+    pub(crate) retry_initial_delay_ms: u64,
+    pub(crate) retry_max_delay_ms: u64,
+    pub(crate) retry_max_attempts: u32,
 }
 
 impl RelayConfig {
@@ -165,6 +168,24 @@ impl RelayConfig {
     #[must_use]
     pub const fn connect_timeout_ms(&self) -> u64 {
         self.connect_timeout_ms
+    }
+
+    /// Returns the initial relay retry delay before random jitter.
+    #[must_use]
+    pub const fn retry_initial_delay_ms(&self) -> u64 {
+        self.retry_initial_delay_ms
+    }
+
+    /// Returns the maximum relay retry delay before random jitter.
+    #[must_use]
+    pub const fn retry_max_delay_ms(&self) -> u64 {
+        self.retry_max_delay_ms
+    }
+
+    /// Returns the maximum number of consumed relay delivery attempts.
+    #[must_use]
+    pub const fn retry_max_attempts(&self) -> u32 {
+        self.retry_max_attempts
     }
 }
 

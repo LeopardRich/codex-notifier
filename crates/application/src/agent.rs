@@ -17,6 +17,8 @@ use crate::SafeErrorCode;
 const MAX_WORKERS: usize = 64;
 const MIN_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(10);
 const MAX_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
+const MIN_QUEUE_WAKE_DELAY: Duration = Duration::from_millis(1);
+const MAX_QUEUE_WAKE_DELAY: Duration = Duration::from_secs(60 * 60);
 
 /// Explicit runtime role selected by validated configuration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -165,6 +167,7 @@ pub enum SubmissionOutcome {
 pub struct AgentLease {
     event: CanonicalEvent,
     token: String,
+    attempt: u32,
 }
 
 impl AgentLease {
@@ -173,9 +176,14 @@ impl AgentLease {
     /// # Errors
     ///
     /// Returns [`AgentQueueError::Corrupt`] for an unsafe token.
-    pub fn new(event: CanonicalEvent, token: impl Into<String>) -> Result<Self, AgentQueueError> {
+    pub fn new(
+        event: CanonicalEvent,
+        token: impl Into<String>,
+        attempt: u32,
+    ) -> Result<Self, AgentQueueError> {
         let token = token.into();
-        if token.is_empty()
+        if attempt == 0
+            || token.is_empty()
             || token.len() > 64
             || !token.is_ascii()
             || !token.bytes().enumerate().all(|(index, byte)| {
@@ -186,7 +194,11 @@ impl AgentLease {
         {
             return Err(AgentQueueError::Corrupt);
         }
-        Ok(Self { event, token })
+        Ok(Self {
+            event,
+            token,
+            attempt,
+        })
     }
 
     /// Returns the leased canonical event.
@@ -200,6 +212,21 @@ impl AgentLease {
     pub fn token(&self) -> &str {
         &self.token
     }
+
+    /// Returns the one-based delivery attempt number retained by the queue.
+    #[must_use]
+    pub const fn attempt(&self) -> u32 {
+        self.attempt
+    }
+}
+
+/// Outcome of consuming one retryable delivery attempt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RetryResult {
+    /// The event remains durable and has a future availability time.
+    Scheduled,
+    /// The retry bound was reached and only safe dead-letter metadata remains.
+    DeadLettered,
 }
 
 /// Stable queue failure classifications used for backpressure and recovery.
@@ -258,6 +285,18 @@ pub trait AgentQueue: Send + Sync {
     ///
     /// Returns a classified lock, corruption, or availability failure.
     fn lease(&self, worker: usize) -> Result<Option<AgentLease>, AgentQueueError>;
+    /// Returns the delay until durable work may next become leaseable.
+    ///
+    /// `None` means no queued or recoverable leased work is currently known.
+    /// Implementations may return an approximate delay because a concurrent
+    /// enqueue also wakes the runtime explicitly.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified lock, corruption, or availability failure.
+    fn next_wake(&self) -> Result<Option<Duration>, AgentQueueError> {
+        Ok(None)
+    }
     /// Commits successful delivery and removes the leased payload.
     ///
     /// # Errors
@@ -271,7 +310,11 @@ pub trait AgentQueue: Send + Sync {
     ///
     /// Returns a classified stale-lease, corruption, lock, or availability
     /// failure.
-    fn retry(&self, lease: &AgentLease, code: &SafeErrorCode) -> Result<(), AgentQueueError>;
+    fn retry(
+        &self,
+        lease: &AgentLease,
+        code: &SafeErrorCode,
+    ) -> Result<RetryResult, AgentQueueError>;
     /// Safely returns retryable or cancelled work to durable availability.
     ///
     /// # Errors
@@ -569,9 +612,18 @@ async fn worker_loop(inner: Arc<AgentInner>, worker: usize) -> Result<(), AgentQ
         }
         let notified = inner.notify.notified();
         let Some(lease) = inner.queue.lease(worker)? else {
-            tokio::select! {
-                () = inner.cancellation.cancelled() => return Ok(()),
-                () = notified => continue,
+            if let Some(delay) = inner.queue.next_wake()? {
+                let delay = delay.clamp(MIN_QUEUE_WAKE_DELAY, MAX_QUEUE_WAKE_DELAY);
+                tokio::select! {
+                    () = inner.cancellation.cancelled() => return Ok(()),
+                    () = notified => continue,
+                    () = tokio::time::sleep(delay) => continue,
+                }
+            } else {
+                tokio::select! {
+                    () = inner.cancellation.cancelled() => return Ok(()),
+                    () = notified => continue,
+                }
             }
         };
         let mut lease = LeaseGuard::new(Arc::clone(&inner.queue), lease, &inner.shutdown_code);
@@ -592,9 +644,16 @@ async fn worker_loop(inner: Arc<AgentInner>, worker: usize) -> Result<(), AgentQ
                 inner.released.fetch_add(1, Ordering::AcqRel);
             }
             DeliveryOutcome::Failed(failure) if failure.retryable() => {
-                inner.queue.retry(lease.get(), failure.code())?;
+                let retry = inner.queue.retry(lease.get(), failure.code())?;
                 lease.disarm();
-                inner.retried.fetch_add(1, Ordering::AcqRel);
+                match retry {
+                    RetryResult::Scheduled => {
+                        inner.retried.fetch_add(1, Ordering::AcqRel);
+                    }
+                    RetryResult::DeadLettered => {
+                        inner.dead_lettered.fetch_add(1, Ordering::AcqRel);
+                    }
+                }
             }
             DeliveryOutcome::Failed(failure) => {
                 inner.queue.dead_letter(lease.get(), failure.code())?;

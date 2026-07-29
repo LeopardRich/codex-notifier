@@ -9,11 +9,13 @@ license.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+codex-notifier-application = { path = "../application" }
 codex-notifier-core = { path = "../core" }
 codex-notifier-ipc = { path = "../ipc" }
 serde_json.workspace = true
 thiserror.workspace = true
 time.workspace = true
+tokio.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true

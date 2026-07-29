@@ -216,6 +216,51 @@ fn retries_schedule_then_dead_letter_at_the_attempt_limit() {
 }
 
 #[test]
+fn next_availability_tracks_queued_retries_and_lease_recovery() {
+    let policy = StorePolicy::default()
+        .with_lease_duration_ms(1_000)
+        .expect("lease policy");
+    let mut store = SqliteStore::open_in_memory(policy).expect("memory store");
+    assert_eq!(
+        store
+            .next_available_at_ms(NOW_MS)
+            .expect("empty availability"),
+        None
+    );
+    let fixture = event(ID_1, EventKind::TaskCompleted, NOW_MS - 1_000);
+    store.enqueue(&fixture, NOW_MS).expect("enqueue");
+    assert_eq!(
+        store
+            .next_available_at_ms(NOW_MS)
+            .expect("queued availability"),
+        Some(NOW_MS)
+    );
+    store
+        .lease_next(NOW_MS, "lease-01")
+        .expect("lease")
+        .expect("event");
+    assert_eq!(
+        store.next_available_at_ms(NOW_MS).expect("lease recovery"),
+        Some(NOW_MS + 1_000)
+    );
+    store
+        .retry(
+            fixture.event_id(),
+            "lease-01",
+            NOW_MS,
+            NOW_MS + 2_000,
+            "ssh_network_unavailable",
+        )
+        .expect("retry");
+    assert_eq!(
+        store
+            .next_available_at_ms(NOW_MS)
+            .expect("retry availability"),
+        Some(NOW_MS + 2_000)
+    );
+}
+
+#[test]
 fn cancelled_lease_release_does_not_consume_delivery_attempts() {
     let policy = StorePolicy::default().with_max_attempts(1).expect("policy");
     let mut store = SqliteStore::open_in_memory(policy).expect("memory store");

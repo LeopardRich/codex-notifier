@@ -7,7 +7,7 @@ use std::sync::Arc;
 use codex_notifier_application::{AgentError, EventDelivery, RoleDeliveryFactory};
 use codex_notifier_config::{
     CliOverrides, Config, ConfigError, ConfigLoader, ConfigPaths, FileSystemStateProbe,
-    NotificationPrivacy, PathEnvironment, Platform,
+    NotificationPrivacy, PathEnvironment, Platform, Role,
 };
 use codex_notifier_core::{
     CanonicalEvent, EventId, EventKind, EventSource, Extensions, Presentation, Privacy, Urgency,
@@ -17,6 +17,7 @@ use codex_notifier_native_notification::{
     NativeNotificationAdapter, NotificationContentPolicy, NotificationDiagnostic,
     NotificationPolicy,
 };
+use codex_notifier_ssh_transport::{OpenSshConfig, OpenSshDelivery, SshDeliveryError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use time::OffsetDateTime;
@@ -52,6 +53,9 @@ pub enum DesktopError {
     /// Agent status could not be written safely.
     #[error("desktop agent status is unavailable")]
     Status,
+    /// Relay SSH delivery configuration is unavailable.
+    #[error("relay SSH configuration is invalid")]
+    Ssh(#[from] SshDeliveryError),
 }
 
 impl DesktopError {
@@ -66,6 +70,7 @@ impl DesktopError {
             Self::Ipc(error) => error.code().as_str(),
             Self::TestEvent => "desktop_test_event_invalid",
             Self::Status => "agent_status_unavailable",
+            Self::Ssh(error) => error.code(),
         }
     }
 }
@@ -148,7 +153,7 @@ pub async fn run_agent() -> Result<(), DesktopError> {
     let (_, config) = load_current_config()?;
     let shutdown_path = config.storage().state_dir().join(SHUTDOWN_FILE);
     let _ = fs::remove_file(&shutdown_path);
-    let factory = NativeRoleFactory::new(&config);
+    let factory = ConfiguredRoleFactory::new(&config)?;
     let host = AgentHost::from_config(&config, &factory)?;
     let _status = AgentStatusGuard::create(&config)?;
     host.run_until(shutdown_signal(shutdown_path)).await?;
@@ -318,19 +323,34 @@ fn synthetic_event(kind: EventKind) -> Result<CanonicalEvent, DesktopError> {
     .map_err(|_| DesktopError::TestEvent)
 }
 
-struct NativeRoleFactory {
+struct ConfiguredRoleFactory {
     policy: NotificationPolicy,
+    relay: Option<OpenSshDelivery>,
 }
 
-impl NativeRoleFactory {
-    fn new(config: &Config) -> Self {
-        Self {
+impl ConfiguredRoleFactory {
+    fn new(config: &Config) -> Result<Self, DesktopError> {
+        let relay = if config.agent().role() == Role::Relay {
+            let alias = config
+                .relay()
+                .ssh_host_alias()
+                .ok_or(SshDeliveryError::InvalidConfiguration)?;
+            let ssh = OpenSshConfig::new(
+                alias,
+                std::time::Duration::from_millis(config.relay().connect_timeout_ms()),
+            )?;
+            Some(OpenSshDelivery::new(ssh))
+        } else {
+            None
+        };
+        Ok(Self {
             policy: notification_policy(config),
-        }
+            relay,
+        })
     }
 }
 
-impl RoleDeliveryFactory for NativeRoleFactory {
+impl RoleDeliveryFactory for ConfiguredRoleFactory {
     fn desktop(&self) -> Result<Arc<dyn EventDelivery>, AgentError> {
         native_adapter_for_policy(self.policy)
             .map(|adapter| Arc::new(adapter) as Arc<dyn EventDelivery>)
@@ -338,7 +358,10 @@ impl RoleDeliveryFactory for NativeRoleFactory {
     }
 
     fn relay(&self) -> Result<Arc<dyn EventDelivery>, AgentError> {
-        Err(AgentError::DeliveryInitialization)
+        self.relay
+            .clone()
+            .map(|adapter| Arc::new(adapter) as Arc<dyn EventDelivery>)
+            .ok_or(AgentError::DeliveryInitialization)
     }
 }
 

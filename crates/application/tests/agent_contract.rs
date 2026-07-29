@@ -8,7 +8,7 @@ use std::time::Duration as StdDuration;
 
 use codex_notifier_application::{
     AgentError, AgentLease, AgentPolicy, AgentQueue, AgentQueueError, AgentRuntime, AgentState,
-    CancellationToken, DeliveryFuture, DeliveryOutcome, EnqueueResult, EventDelivery,
+    CancellationToken, DeliveryFuture, DeliveryOutcome, EnqueueResult, EventDelivery, RetryResult,
     RoleDeliveryFactory, RuntimeRole, SafeErrorCode, SubmissionOutcome,
 };
 use codex_notifier_core::{
@@ -185,7 +185,7 @@ impl AgentQueue for FakeQueue {
         let sequence = self.next_lease.fetch_add(1, Ordering::Relaxed);
         let token = format!("w{worker}_{sequence}");
         state.leased.insert(token.clone(), event.clone());
-        AgentLease::new(event, token).map(Some)
+        AgentLease::new(event, token, 1).map(Some)
     }
 
     fn acknowledge(&self, lease: &AgentLease) -> Result<(), AgentQueueError> {
@@ -201,8 +201,13 @@ impl AgentQueue for FakeQueue {
         Ok(())
     }
 
-    fn retry(&self, lease: &AgentLease, code: &SafeErrorCode) -> Result<(), AgentQueueError> {
-        self.release(lease, code)
+    fn retry(
+        &self,
+        lease: &AgentLease,
+        code: &SafeErrorCode,
+    ) -> Result<RetryResult, AgentQueueError> {
+        self.release(lease, code)?;
+        Ok(RetryResult::Scheduled)
     }
 
     fn release(&self, lease: &AgentLease, code: &SafeErrorCode) -> Result<(), AgentQueueError> {

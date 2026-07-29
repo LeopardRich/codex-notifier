@@ -23,7 +23,8 @@ use codex_notifier_config::{
 use codex_notifier_core::{
     CanonicalEvent, EventId, EventKind, EventSource, Extensions, Presentation, Privacy, Urgency,
 };
-use codex_notifier_ipc::{AckStatus, Acknowledgement};
+use codex_notifier_ipc::{AckStatus, Acknowledgement, IpcClient, IpcEndpoint, IpcPolicy};
+use codex_notifier_ssh_transport::{OpenSshConfig, OpenSshDelivery};
 use tempfile::TempDir;
 use time::{Duration, OffsetDateTime};
 use tokio::sync::oneshot;
@@ -43,8 +44,8 @@ impl RecordingDelivery {
         self.events.lock().expect("delivery lock").len()
     }
 
-    fn first(&self) -> CanonicalEvent {
-        self.events.lock().expect("delivery lock")[0].clone()
+    fn events(&self) -> Vec<CanonicalEvent> {
+        self.events.lock().expect("delivery lock").clone()
     }
 }
 
@@ -75,6 +76,20 @@ impl RoleDeliveryFactory for RecordingFactory {
 
     fn relay(&self) -> Result<Arc<dyn EventDelivery>, AgentError> {
         Err(AgentError::DeliveryInitialization)
+    }
+}
+
+struct OpenSshFactory {
+    delivery: OpenSshDelivery,
+}
+
+impl RoleDeliveryFactory for OpenSshFactory {
+    fn desktop(&self) -> Result<Arc<dyn EventDelivery>, AgentError> {
+        Err(AgentError::DeliveryInitialization)
+    }
+
+    fn relay(&self) -> Result<Arc<dyn EventDelivery>, AgentError> {
+        Ok(Arc::new(self.delivery.clone()))
     }
 }
 
@@ -423,6 +438,95 @@ async fn real_forced_openssh_session_enforces_the_receive_boundary() {
             .arg(&sshd_config),
         "sshd configuration check",
     );
+
+    let host_public = fs::read_to_string(host_key.with_extension("pub")).expect("host public key");
+    let mut host_parts = host_public.split_ascii_whitespace();
+    let algorithm = host_parts.next().expect("host algorithm");
+    let key = host_parts.next().expect("host key");
+    let known_hosts = root.path().join("known_hosts");
+    fs::write(
+        &known_hosts,
+        format!("[127.0.0.1]:{port} {algorithm} {key}\n"),
+    )
+    .expect("known hosts");
+    fs::set_permissions(&known_hosts, fs::Permissions::from_mode(0o600)).expect("known hosts mode");
+
+    let client_config = root.path().join("ssh_config");
+    assert!(
+        [&client_key, &known_hosts]
+            .iter()
+            .all(|path| !path.to_string_lossy().contains(['"', '\n', '\r']))
+    );
+    fs::write(
+        &client_config,
+        format!(
+            "Host stage16-desktop\n  HostName 127.0.0.1\n  Port {port}\n  User {user}\n  IdentityFile \"{}\"\n  IdentitiesOnly yes\n  UserKnownHostsFile \"{}\"\n  StrictHostKeyChecking yes\n  BatchMode yes\n",
+            client_key.display(),
+            known_hosts.display(),
+        ),
+    )
+    .expect("relay SSH configuration");
+    fs::set_permissions(&client_config, fs::Permissions::from_mode(0o600))
+        .expect("relay SSH config mode");
+
+    let relay_config_base = root.path().join("relay-config");
+    let relay_state_base = root.path().join("relay-state");
+    fs::create_dir_all(&relay_config_base).expect("relay config base");
+    fs::create_dir_all(&relay_state_base).expect("relay state base");
+    let relay_paths = PathEnvironment::new()
+        .with_home(root.path())
+        .with_xdg_config_home(&relay_config_base)
+        .with_xdg_state_home(&relay_state_base)
+        .resolve(Platform::Xdg)
+        .expect("relay XDG paths");
+    let relay_profile = "real-relay";
+    let relay_config = ConfigLoader::load(
+        &relay_paths,
+        Some(
+            "config_version = 1\n[relay]\nretry_initial_delay_ms = 1000\nretry_max_delay_ms = 1000\nretry_max_attempts = 5\n",
+        ),
+        None,
+        CliOverrides::new()
+            .with_role("relay")
+            .with_profile(relay_profile)
+            .with_relay_host("stage16-desktop"),
+        &FileSystemStateProbe,
+    )
+    .expect("relay agent configuration");
+    let relay_endpoint = IpcEndpoint::new(
+        relay_config.storage().state_dir().join("run"),
+        relay_profile,
+    )
+    .expect("relay endpoint");
+    let relay_factory = OpenSshFactory {
+        delivery: OpenSshDelivery::new(
+            OpenSshConfig::new("stage16-desktop", StdDuration::from_secs(5))
+                .expect("OpenSSH delivery configuration")
+                .with_config_file(&client_config)
+                .expect("OpenSSH client config path"),
+        ),
+    };
+    let relay_host =
+        AgentHost::from_config(&relay_config, &relay_factory).expect("relay agent host");
+    let relay_runtime = relay_host.runtime();
+    let (relay_shutdown_tx, relay_shutdown_rx) = oneshot::channel();
+    let relay_task = tokio::spawn(async move {
+        relay_host
+            .run_until(async {
+                let _ = relay_shutdown_rx.await;
+            })
+            .await
+    });
+    wait_for_agent(&relay_runtime).await;
+    let relayed = event("offline-retry");
+    let relay_acknowledgement = IpcClient::new(relay_endpoint.clone(), IpcPolicy::default())
+        .submit(&relayed)
+        .await
+        .expect("relay IPC submission");
+    assert_eq!(relay_acknowledgement.status(), AckStatus::Accepted);
+    tokio::time::sleep(StdDuration::from_millis(500)).await;
+    assert_eq!(delivery.count(), 0, "desktop SSH server is still offline");
+
     let log_path = root.path().join("sshd.log");
     let log = File::create(&log_path).expect("sshd log");
     let sshd = Command::new("sudo")
@@ -438,18 +542,19 @@ async fn real_forced_openssh_session_enforces_the_receive_boundary() {
         log: log_path,
     };
     wait_for_sshd(port);
+    wait_for_deliveries(&delivery, 1).await;
 
-    let host_public = fs::read_to_string(host_key.with_extension("pub")).expect("host public key");
-    let mut host_parts = host_public.split_ascii_whitespace();
-    let algorithm = host_parts.next().expect("host algorithm");
-    let key = host_parts.next().expect("host key");
-    let known_hosts = root.path().join("known_hosts");
-    fs::write(
-        &known_hosts,
-        format!("[127.0.0.1]:{port} {algorithm} {key}\n"),
-    )
-    .expect("known hosts");
-    fs::set_permissions(&known_hosts, fs::Permissions::from_mode(0o600)).expect("known hosts mode");
+    let output = ssh_request(
+        ssh_command(&client_key, &known_hosts),
+        port,
+        &user,
+        Some("codex-notifier receive"),
+        &relayed.to_json().expect("duplicate relayed JSON"),
+    );
+    let duplicate = acknowledgement(&output);
+    assert_eq!(duplicate.status(), AckStatus::Duplicate);
+    assert_eq!(duplicate.event_id(), relayed.event_id());
+    assert_eq!(delivery.count(), 1);
 
     let valid = event("metacharacters");
     let output = ssh_request(
@@ -462,10 +567,13 @@ async fn real_forced_openssh_session_enforces_the_receive_boundary() {
     let accepted = acknowledgement(&output);
     assert_eq!(accepted.status(), AckStatus::Accepted);
     assert_eq!(accepted.event_id(), valid.event_id());
-    wait_for_deliveries(&delivery, 1).await;
-    assert_eq!(
-        delivery.first().to_json().expect("delivered JSON"),
-        valid.to_json().expect("valid JSON")
+    wait_for_deliveries(&delivery, 2).await;
+    assert!(
+        delivery
+            .events()
+            .iter()
+            .any(|delivered| delivered.to_json().ok() == valid.to_json().ok()),
+        "direct event was not delivered"
     );
 
     let marker = root.path().join("must-not-exist");
@@ -533,8 +641,16 @@ async fn real_forced_openssh_session_enforces_the_receive_boundary() {
             || String::from_utf8_lossy(&output.stderr).contains("forwarding failed")
     );
 
-    assert_eq!(delivery.count(), 1);
+    assert_eq!(delivery.count(), 2);
+    relay_shutdown_tx.send(()).expect("relay agent shutdown");
+    let relay_report = relay_task
+        .await
+        .expect("relay agent task")
+        .expect("relay agent run");
+    assert!(relay_report.agent.retried >= 1);
+    assert_eq!(relay_report.agent.delivered, 1);
+    assert_eq!(relay_report.agent.dead_lettered, 0);
     shutdown_tx.send(()).expect("agent shutdown");
     let report = agent_task.await.expect("agent task").expect("agent run");
-    assert_eq!(report.agent.delivered, 1);
+    assert_eq!(report.agent.delivered, 2);
 }

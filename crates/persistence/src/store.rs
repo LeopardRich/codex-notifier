@@ -419,6 +419,28 @@ impl SqliteStore {
         count_table(&self.connection, "outbox")
     }
 
+    /// Returns when the earliest queued or recoverable leased event can be
+    /// leased, expressed as Unix milliseconds.
+    ///
+    /// # Errors
+    ///
+    /// Returns a corruption or classified database failure for invalid state.
+    pub fn next_available_at_ms(&self, now_ms: i64) -> Result<Option<i64>, PersistenceError> {
+        self.connection
+            .query_row(
+                "SELECT MIN(
+                    CASE
+                        WHEN state = 'leased' AND lease_until_ms > ?1
+                            THEN max(available_at_ms, lease_until_ms)
+                        ELSE available_at_ms
+                    END
+                 ) FROM outbox",
+                [now_ms],
+                |row| row.get(0),
+            )
+            .map_err(map_sqlite_error)
+    }
+
     /// Returns the number of retained delivery receipts.
     ///
     /// # Errors

@@ -150,6 +150,9 @@ impl CliOverrides {
                 ssh_host_alias: self.relay_host,
                 target_profile: None,
                 connect_timeout_ms: None,
+                retry_initial_delay_ms: None,
+                retry_max_delay_ms: None,
+                retry_max_attempts: None,
             }),
             storage: Some(StorageLayer {
                 state_dir: self.state_dir,
@@ -209,6 +212,9 @@ struct Effective {
     ssh_host_alias: Option<String>,
     target_profile: String,
     connect_timeout_ms: u64,
+    retry_initial_delay_ms: u64,
+    retry_max_delay_ms: u64,
+    retry_max_attempts: u32,
     state_dir: PathBuf,
     max_queue_entries: usize,
     log_level: String,
@@ -230,6 +236,9 @@ impl Effective {
             ssh_host_alias: None,
             target_profile: "default".to_owned(),
             connect_timeout_ms: 10_000,
+            retry_initial_delay_ms: 1_000,
+            retry_max_delay_ms: 60_000,
+            retry_max_attempts: 20,
             state_dir: paths.state_dir().to_owned(),
             max_queue_entries: 1_000,
             log_level: "info".to_owned(),
@@ -257,6 +266,12 @@ impl Effective {
             replace(&mut self.ssh_host_alias, relay.ssh_host_alias.map(Some));
             replace(&mut self.target_profile, relay.target_profile);
             replace(&mut self.connect_timeout_ms, relay.connect_timeout_ms);
+            replace(
+                &mut self.retry_initial_delay_ms,
+                relay.retry_initial_delay_ms,
+            );
+            replace(&mut self.retry_max_delay_ms, relay.retry_max_delay_ms);
+            replace(&mut self.retry_max_attempts, relay.retry_max_attempts);
         }
         if let Some(storage) = layer.storage {
             replace(&mut self.state_dir, storage.state_dir);
@@ -285,6 +300,10 @@ impl Effective {
         }
         let target_profile = validate_profile(self.target_profile)?;
         if !(100..=120_000).contains(&self.connect_timeout_ms)
+            || !(100..=60_000).contains(&self.retry_initial_delay_ms)
+            || !(100..=3_600_000).contains(&self.retry_max_delay_ms)
+            || self.retry_initial_delay_ms > self.retry_max_delay_ms
+            || !(1..=1_000).contains(&self.retry_max_attempts)
             || !(1..=100_000).contains(&self.max_queue_entries)
             || !is_absolute_any(&self.state_dir)
             || !is_absolute_any(&self.log_dir)
@@ -317,6 +336,9 @@ impl Effective {
                 ssh_host_alias,
                 target_profile,
                 connect_timeout_ms: self.connect_timeout_ms,
+                retry_initial_delay_ms: self.retry_initial_delay_ms,
+                retry_max_delay_ms: self.retry_max_delay_ms,
+                retry_max_attempts: self.retry_max_attempts,
             },
             storage: StorageConfig {
                 state_dir: self.state_dir,
@@ -531,6 +553,9 @@ struct RelayLayer {
     ssh_host_alias: Option<String>,
     target_profile: Option<String>,
     connect_timeout_ms: Option<u64>,
+    retry_initial_delay_ms: Option<u64>,
+    retry_max_delay_ms: Option<u64>,
+    retry_max_attempts: Option<u32>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]

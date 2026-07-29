@@ -46,6 +46,9 @@ fn four_layers_merge_in_documented_order() {
     assert_eq!(defaults.agent().profile(), "default");
     assert_eq!(defaults.storage().max_queue_entries(), 1_000);
     assert_eq!(defaults.desktop().privacy(), NotificationPrivacy::Private);
+    assert_eq!(defaults.relay().retry_initial_delay_ms(), 1_000);
+    assert_eq!(defaults.relay().retry_max_delay_ms(), 60_000);
+    assert_eq!(defaults.relay().retry_max_attempts(), 20);
 
     let user = r#"
 config_version = 1
@@ -56,6 +59,11 @@ shutdown_timeout_ms = 1000
 
 [desktop]
 privacy = "public"
+
+[relay]
+retry_initial_delay_ms = 500
+retry_max_delay_ms = 5000
+retry_max_attempts = 12
 
 [storage]
 max_queue_entries = 10
@@ -68,6 +76,9 @@ profile = "profile"
 
 [desktop]
 privacy = "private"
+
+[relay]
+retry_max_delay_ms = 3000
 
 [storage]
 max_queue_entries = 20
@@ -84,6 +95,9 @@ max_queue_entries = 20
     assert_eq!(config.desktop().privacy(), NotificationPrivacy::Public);
     assert_eq!(config.storage().max_queue_entries(), 30);
     assert_eq!(config.logging().level(), LogLevel::Debug);
+    assert_eq!(config.relay().retry_initial_delay_ms(), 500);
+    assert_eq!(config.relay().retry_max_delay_ms(), 3_000);
+    assert_eq!(config.relay().retry_max_attempts(), 12);
 }
 
 #[test]
@@ -305,7 +319,7 @@ fn validates_identifier_numeric_and_path_boundaries() {
     let endpoint_64 = "e".repeat(64);
     let valid = load(
         Some(
-            "config_version = 1\n[agent]\nshutdown_timeout_ms = 100\n[relay]\nconnect_timeout_ms = 120000\n[storage]\nmax_queue_entries = 100000",
+            "config_version = 1\n[agent]\nshutdown_timeout_ms = 100\n[relay]\nconnect_timeout_ms = 120000\nretry_initial_delay_ms = 100\nretry_max_delay_ms = 3600000\nretry_max_attempts = 1000\n[storage]\nmax_queue_entries = 100000",
         ),
         None,
         CliOverrides::new()
@@ -315,6 +329,9 @@ fn validates_identifier_numeric_and_path_boundaries() {
     .expect("inclusive boundaries");
     assert_eq!(valid.agent().shutdown_timeout_ms(), 100);
     assert_eq!(valid.storage().max_queue_entries(), 100_000);
+    assert_eq!(valid.relay().retry_initial_delay_ms(), 100);
+    assert_eq!(valid.relay().retry_max_delay_ms(), 3_600_000);
+    assert_eq!(valid.relay().retry_max_attempts(), 1_000);
 
     assert_error(
         CliOverrides::new().with_profile("a".repeat(65)),
@@ -332,6 +349,18 @@ fn validates_identifier_numeric_and_path_boundaries() {
         CliOverrides::new().with_state_dir("relative/state"),
         &ConfigError::InvalidValue,
     );
+    for document in [
+        "config_version = 1\n[relay]\nretry_initial_delay_ms = 99",
+        "config_version = 1\n[relay]\nretry_initial_delay_ms = 1000\nretry_max_delay_ms = 999",
+        "config_version = 1\n[relay]\nretry_max_delay_ms = 3600001",
+        "config_version = 1\n[relay]\nretry_max_attempts = 0",
+        "config_version = 1\n[relay]\nretry_max_attempts = 1001",
+    ] {
+        assert_eq!(
+            load(Some(document), None, CliOverrides::new()),
+            Err(ConfigError::InvalidValue)
+        );
+    }
 }
 
 fn assert_error(cli: CliOverrides, expected: &ConfigError) {
