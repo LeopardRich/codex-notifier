@@ -38,3 +38,18 @@ jobs:
 
       - name: Run tests
         run: cargo test --workspace
+
+      - name: Verify Windows Session 0 diagnostic
+        if: matrix.target == 'windows-desktop'
+        run: cargo test -p codex-notifier-native-notification --test windows_smoke reports_real_non_interactive_session -- --ignored --exact --nocapture
+
+      - name: Build macOS notification smoke tests
+        if: matrix.target == 'macos-desktop'
+        run: cargo test -p codex-notifier-native-notification --test macos_smoke --no-run
+
+      - name: Verify macOS no-Aqua diagnostic
+        if: matrix.target == 'macos-desktop'
+        run: |
+          test_binary="$(find target/debug/deps -maxdepth 1 -type f -name 'macos_smoke-*' ! -name '*.d' | head -n 1)"
+          test -n "$test_binary"
+          sudo -u nobody env HOME=/tmp TMPDIR=/tmp "$test_binary" --exact reports_real_no_gui_session --ignored --nocapture

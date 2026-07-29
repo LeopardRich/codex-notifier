@@ -10,7 +10,7 @@ use codex_notifier_core::{
 };
 use codex_notifier_native_notification::{
     NativeNotificationAdapter, NotificationBackend, NotificationContentPolicy, NotificationPolicy,
-    NotificationStatus, WindowsNotificationBackend,
+    NotificationStatus, WindowsApplicationId, WindowsNotificationBackend,
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -73,6 +73,32 @@ fn reports_real_application_disabled_state() {
     assert_eq!(
         diagnostic.status(),
         NotificationStatus::DisabledForApplication,
+        "Windows notification diagnostic: {diagnostic:?}"
+    );
+}
+
+#[test]
+#[ignore = "requires an interactive Windows session and an unregistered diagnostic identity"]
+fn reports_real_unregistered_application_identity() {
+    let identity = WindowsApplicationId::new("LeopardRich.CodexNotifier.MissingIdentityProbe")
+        .expect("valid diagnostic AUMID");
+    let backend = WindowsNotificationBackend::new(identity);
+    let diagnostic = backend.diagnose();
+    assert_eq!(
+        diagnostic.status(),
+        NotificationStatus::ApplicationIdentityMissing,
+        "Windows notification diagnostic: {diagnostic:?}"
+    );
+}
+
+#[test]
+#[ignore = "requires a non-interactive Windows Session 0 process"]
+fn reports_real_non_interactive_session() {
+    let backend = WindowsNotificationBackend::codex_notifier();
+    let diagnostic = backend.diagnose();
+    assert_eq!(
+        diagnostic.status(),
+        NotificationStatus::NoInteractiveSession,
         "Windows notification diagnostic: {diagnostic:?}"
     );
 }

@@ -22,6 +22,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 const BUNDLED_SMOKE_ENV: &str = "CODEX_NOTIFIER_BUNDLED_MACOS_SMOKE";
 const TEST_NAME: &str = "displays_task_completion_and_approval_request_notifications";
+const NO_GUI_TEST_NAME: &str = "reports_real_no_gui_session";
 const EXECUTABLE_NAME: &str = "codex-notifier-macos-smoke";
 
 fn event(kind: EventKind, id: &str, urgency: Urgency) -> CanonicalEvent {
@@ -45,7 +46,7 @@ fn event(kind: EventKind, id: &str, urgency: Urgency) -> CanonicalEvent {
 #[ignore = "requires an interactive Aqua session, prompts for authorization, and displays two notifications"]
 fn displays_task_completion_and_approval_request_notifications() {
     if std::env::var_os(BUNDLED_SMOKE_ENV).is_none() {
-        relaunch_in_product_bundle();
+        relaunch_in_product_bundle(TEST_NAME);
         return;
     }
 
@@ -81,7 +82,35 @@ fn displays_task_completion_and_approval_request_notifications() {
         .expect("macOS accepted the approval-request notification");
 }
 
-fn relaunch_in_product_bundle() {
+#[test]
+fn reports_real_missing_application_identity() {
+    let backend = MacOsNotificationBackend::codex_notifier();
+    let diagnostic = backend.diagnose();
+    assert_eq!(
+        diagnostic.status(),
+        NotificationStatus::ApplicationIdentityMissing,
+        "macOS notification diagnostic: {diagnostic:?}"
+    );
+}
+
+#[test]
+#[ignore = "requires a signed product bundle running without an Aqua launch domain"]
+fn reports_real_no_gui_session() {
+    if std::env::var_os(BUNDLED_SMOKE_ENV).is_none() {
+        relaunch_in_product_bundle(NO_GUI_TEST_NAME);
+        return;
+    }
+
+    let backend = MacOsNotificationBackend::codex_notifier();
+    let diagnostic = backend.diagnose();
+    assert_eq!(
+        diagnostic.status(),
+        NotificationStatus::NoInteractiveSession,
+        "macOS notification diagnostic: {diagnostic:?}"
+    );
+}
+
+fn relaunch_in_product_bundle(test_name: &str) {
     let directory = tempdir().expect("temporary smoke bundle directory");
     let bundle = directory.path().join("Codex Notifier.app");
     let contents = bundle.join("Contents");
@@ -112,7 +141,7 @@ fn relaunch_in_product_bundle() {
     assert!(signed.success(), "ad-hoc codesign failed: {signed}");
 
     let status = Command::new(&bundled)
-        .args(["--exact", TEST_NAME, "--ignored", "--nocapture"])
+        .args(["--exact", test_name, "--ignored", "--nocapture"])
         .env(BUNDLED_SMOKE_ENV, "1")
         .status()
         .expect("launch bundled smoke test");
