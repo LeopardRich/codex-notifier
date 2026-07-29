@@ -78,12 +78,20 @@ impl RoleDeliveryFactory for RecordingFactory {
     }
 }
 
-struct SshdGuard(Child);
+struct SshdGuard {
+    child: Child,
+    log: PathBuf,
+}
 
 impl Drop for SshdGuard {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        if std::thread::panicking() {
+            if let Ok(log) = fs::read_to_string(&self.log) {
+                eprintln!("temporary sshd log:\n{log}");
+            }
+        }
     }
 }
 
@@ -368,7 +376,8 @@ async fn real_forced_openssh_session_enforces_the_receive_boundary() {
             .arg(&sshd_config),
         "sshd configuration check",
     );
-    let log = File::create(root.path().join("sshd.log")).expect("sshd log");
+    let log_path = root.path().join("sshd.log");
+    let log = File::create(&log_path).expect("sshd log");
     let sshd = Command::new("sudo")
         .args(["/usr/sbin/sshd", "-D", "-e", "-f"])
         .arg(&sshd_config)
@@ -377,7 +386,10 @@ async fn real_forced_openssh_session_enforces_the_receive_boundary() {
         .stderr(log)
         .spawn()
         .expect("temporary sshd");
-    let _sshd = SshdGuard(sshd);
+    let _sshd = SshdGuard {
+        child: sshd,
+        log: log_path,
+    };
     wait_for_sshd(port);
 
     let host_public = fs::read_to_string(host_key.with_extension("pub")).expect("host public key");
