@@ -20,7 +20,6 @@ mod macos {
     use std::thread;
     use std::time::{Duration, Instant};
 
-    use block2::RcBlock;
     use codex_notifier_core::{
         CanonicalEvent, EventId, EventKind, EventSource, Extensions, Presentation, Privacy, Urgency,
     };
@@ -28,10 +27,9 @@ mod macos {
         CODEX_NOTIFIER_BUNDLE_ID, MacOsNotificationBackend, NativeNotificationAdapter,
         NotificationBackend, NotificationContentPolicy, NotificationPolicy, NotificationStatus,
     };
-    use objc2::{MainThreadMarker, runtime::Bool};
+    use objc2::MainThreadMarker;
     use objc2_app_kit::{NSApplication, NSEventMask};
-    use objc2_foundation::{NSDate, NSError, NSString};
-    use objc2_user_notifications::{UNAuthorizationOptions, UNUserNotificationCenter};
+    use objc2_foundation::{NSDate, NSString};
     use tempfile::Builder;
     use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -150,32 +148,24 @@ mod macos {
         application.activate();
 
         let (sender, receiver) = mpsc::sync_channel(1);
-        let completion = RcBlock::new(move |granted: Bool, error: *mut NSError| {
+        thread::spawn(move || {
+            let result = MacOsNotificationBackend::codex_notifier().request_authorization();
             sender
-                .send((granted.as_bool(), error.is_null()))
+                .send(result)
                 .expect("authorization result receiver must remain connected");
         });
-        let center = UNUserNotificationCenter::currentNotificationCenter();
-        center.requestAuthorizationWithOptions_completionHandler(
-            UNAuthorizationOptions::Alert | UNAuthorizationOptions::Sound,
-            &completion,
-        );
 
         let deadline = Instant::now() + AUTHORIZATION_TIMEOUT;
         let default_run_loop_mode = NSString::from_str("kCFRunLoopDefaultMode");
         loop {
             match receiver.try_recv() {
-                Ok((granted, error_free)) => {
-                    assert!(
-                        error_free,
-                        "macOS notification authorization returned an error"
-                    );
-                    assert!(granted, "macOS notification authorization must be granted");
+                Ok(result) => {
+                    result.expect("macOS notification authorization must be granted");
                     break;
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    panic!("authorization callback disconnected without a result");
+                    panic!("authorization worker disconnected without a result");
                 }
             }
             assert!(
