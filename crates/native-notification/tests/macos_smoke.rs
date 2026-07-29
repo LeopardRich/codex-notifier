@@ -108,7 +108,7 @@ mod macos {
                 Urgency::Normal,
             ))
             .expect("macOS accepted the task-completion notification");
-        thread::sleep(Duration::from_millis(750));
+        thread::sleep(Duration::from_secs(4));
         adapter
             .deliver_now(&event(
                 EventKind::ApprovalRequested,
@@ -116,6 +116,7 @@ mod macos {
                 Urgency::High,
             ))
             .expect("macOS accepted the approval-request notification");
+        thread::sleep(Duration::from_secs(4));
         if let Some(path) = std::env::var_os(RESULT_PATH_ENV) {
             fs::write(path, b"ok").expect("write successful macOS smoke result");
         }
@@ -168,8 +169,9 @@ mod macos {
         let default_run_loop_mode = NSString::from_str("kCFRunLoopDefaultMode");
         let recover_authorization = std::env::var_os(RECOVER_AUTHORIZATION_ENV).is_some();
         let mut awaiting_settings_grant = false;
+        let mut next_diagnostic_at = Instant::now();
         loop {
-            if awaiting_settings_grant {
+            if awaiting_settings_grant && Instant::now() >= next_diagnostic_at {
                 let diagnostic = MacOsNotificationBackend::codex_notifier().diagnose();
                 if diagnostic.status() == NotificationStatus::Ready {
                     eprintln!(
@@ -177,6 +179,7 @@ mod macos {
                     );
                     break;
                 }
+                next_diagnostic_at = Instant::now() + Duration::from_millis(500);
             }
             match receiver.try_recv() {
                 Ok((granted, error_free)) => {

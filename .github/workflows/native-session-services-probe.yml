@@ -576,10 +576,14 @@ jobs:
           screen_pressed=''
           settings_app_pressed=''
           settings_allow_pressed=''
+          task_observed=''
+          approval_observed=''
           for attempt in $(seq 1 80); do
             CODEX_PROBE_SCREENSHOT="$PWD/target/macos-permission-prompt.png" \
               CODEX_PROBE_SETTINGS_APP_SCREENSHOT="$PWD/target/macos-settings-app.png" \
               CODEX_PROBE_SETTINGS_ALLOW_SCREENSHOT="$PWD/target/macos-settings-allow.png" \
+              CODEX_PROBE_TASK_SCREENSHOT="$PWD/target/macos-task-completed.png" \
+              CODEX_PROBE_APPROVAL_SCREENSHOT="$PWD/target/macos-approval-requested.png" \
               CODEX_PROBE_CLICK_HELPER="$PWD/target/macos-probe-click" \
               CODEX_PROBE_NOTIFICATION_CLICKED="$notification_clicked" \
               CODEX_PROBE_BANNER_HOVERED="$banner_hovered" \
@@ -587,6 +591,8 @@ jobs:
               CODEX_PROBE_SCREEN_PRESSED="$screen_pressed" \
               CODEX_PROBE_SETTINGS_APP_PRESSED="$settings_app_pressed" \
               CODEX_PROBE_SETTINGS_ALLOW_PRESSED="$settings_allow_pressed" \
+              CODEX_PROBE_TASK_OBSERVED="$task_observed" \
+              CODEX_PROBE_APPROVAL_OBSERVED="$approval_observed" \
               osascript >target/macos-ui-current.txt 2>&1 <<'APPLESCRIPT'
           tell application "System Events"
               set observations to ""
@@ -597,6 +603,8 @@ jobs:
               set screenPressed to system attribute "CODEX_PROBE_SCREEN_PRESSED"
               set settingsAppPressed to system attribute "CODEX_PROBE_SETTINGS_APP_PRESSED"
               set settingsAllowPressed to system attribute "CODEX_PROBE_SETTINGS_ALLOW_PRESSED"
+              set taskObserved to system attribute "CODEX_PROBE_TASK_OBSERVED"
+              set approvalObserved to system attribute "CODEX_PROBE_APPROVAL_OBSERVED"
               repeat with candidateProcess in application processes
                   try
                       set processName to name of candidateProcess as text
@@ -623,12 +631,8 @@ jobs:
                                               if elementName is "Allow notifications" and (elementRole is "AXCheckBox" or elementRole is "AXSwitch" or elementRole is "AXButton") then
                                                   set screenshotPath to system attribute "CODEX_PROBE_SETTINGS_ALLOW_SCREENSHOT"
                                                   do shell script "/usr/sbin/screencapture -x " & quoted form of screenshotPath
-                                                  set elementPosition to position of candidateElement
-                                                  set elementSize to size of candidateElement
-                                                  set clickX to (item 1 of elementPosition) + ((item 1 of elementSize) div 2)
-                                                  set clickY to (item 2 of elementPosition) + ((item 2 of elementSize) div 2)
-                                                  do shell script quoted form of clickHelper & " click " & clickX & " " & clickY
-                                                  return "pressed=settings-allow process=" & processName & " role=" & elementRole & " x=" & clickX & " y=" & clickY
+                                                  perform action "AXPress" of candidateElement
+                                                  return "pressed=settings-allow process=" & processName & " role=" & elementRole
                                               end if
                                           end try
                                       end repeat
@@ -665,6 +669,18 @@ jobs:
                                           end if
                                       end try
                                   end repeat
+                              end if
+                              if processName is "NotificationCenter" then
+                                  if taskObserved is not "1" and windowText contains "Codex task finished" then
+                                      set screenshotPath to system attribute "CODEX_PROBE_TASK_SCREENSHOT"
+                                      do shell script "/usr/sbin/screencapture -x " & quoted form of screenshotPath
+                                      return "observed=task-completed process=" & processName
+                                  end if
+                                  if approvalObserved is not "1" and windowText contains "Codex needs approval" then
+                                      set screenshotPath to system attribute "CODEX_PROBE_APPROVAL_SCREENSHOT"
+                                      do shell script "/usr/sbin/screencapture -x " & quoted form of screenshotPath
+                                      return "observed=approval-requested process=" & processName
+                                  end if
                               end if
                               if processName is "NotificationCenter" and windowText contains "Codex Notifier" and windowText contains "Notifications" then
                                   repeat with candidateElement in candidateElements
@@ -720,7 +736,8 @@ jobs:
             cat target/macos-ui-current.txt >>target/macos-ui-history.txt
             if grep -q '^granted=notification' target/macos-ui-current.txt; then
               notification_clicked=1
-              break
+              sleep 1
+              continue
             fi
             if grep -q '^pressed=screen-coordinate' target/macos-ui-current.txt; then
               screen_pressed=1
@@ -744,7 +761,16 @@ jobs:
             fi
             if grep -q '^pressed=settings-allow' target/macos-ui-current.txt; then
               settings_allow_pressed=1
+              settings_app_pressed=1
               sleep 2
+              continue
+            fi
+            if grep -q '^observed=task-completed' target/macos-ui-current.txt; then
+              task_observed=1
+              continue
+            fi
+            if grep -q '^observed=approval-requested' target/macos-ui-current.txt; then
+              approval_observed=1
               continue
             fi
             if ! kill -0 "$smoke_pid" 2>/dev/null; then
@@ -765,11 +791,17 @@ jobs:
             sleep 0.5
           done
           if [[ -z "$result" ]]; then
-            echo "Smoke timed out notification_clicked=$notification_clicked banner_hovered=$banner_hovered banner_pressed=$banner_pressed screen_pressed=$screen_pressed settings_app_pressed=$settings_app_pressed settings_allow_pressed=$settings_allow_pressed" >>target/macos-smoke.log
+            echo "Smoke timed out notification_clicked=$notification_clicked banner_hovered=$banner_hovered banner_pressed=$banner_pressed screen_pressed=$screen_pressed settings_app_pressed=$settings_app_pressed settings_allow_pressed=$settings_allow_pressed task_observed=$task_observed approval_observed=$approval_observed" >>target/macos-smoke.log
             kill "$smoke_pid" 2>/dev/null
             pkill -f codex-notifier-macos-smoke 2>/dev/null
             wait "$smoke_pid" 2>/dev/null
             result=124
+          fi
+          if [[ "$result" -eq 0 ]] && \
+            { [[ "$task_observed" != 1 ]] || [[ "$approval_observed" != 1 ]]; }; then
+            echo "Smoke lacked visible notification evidence task_observed=$task_observed approval_observed=$approval_observed" \
+              >>target/macos-smoke.log
+            result=125
           fi
 
           uid="$(id -u)"
