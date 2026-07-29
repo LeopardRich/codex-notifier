@@ -50,7 +50,7 @@ fn id(value: &str) -> EventId {
 }
 
 #[test]
-fn committed_and_leased_events_recover_after_process_reopen() {
+fn crash_recovery_after_enqueue_during_delivery_and_before_acknowledgement() {
     let directory = tempdir().expect("temporary directory");
     let path = directory.path().join("state.sqlite3");
     let policy = StorePolicy::default()
@@ -88,14 +88,30 @@ fn committed_and_leased_events_recover_after_process_reopen() {
             .expect("lease at expiry")
             .expect("recovered event");
         assert_eq!(recovered.attempt(), 2);
+        // Dropping after the external adapter accepted delivery but before the
+        // SQLite acknowledgement models the unavoidable at-least-once window.
+    }
+    {
+        let mut store = SqliteStore::open(&path, policy).expect("reopen pre-ack database");
+        assert!(
+            store
+                .lease_next(NOW_MS + 1_999, "lease-03")
+                .expect("lease before second expiry")
+                .is_none()
+        );
+        let recovered = store
+            .lease_next(NOW_MS + 2_000, "lease-03")
+            .expect("lease after pre-ack crash")
+            .expect("recovered pre-ack event");
+        assert_eq!(recovered.attempt(), 3);
         store
-            .acknowledge(fixture.event_id(), "lease-02", NOW_MS + 1_001)
+            .acknowledge(fixture.event_id(), "lease-03", NOW_MS + 2_001)
             .expect("acknowledge");
         assert_eq!(store.queue_len().expect("queue length"), 0);
         assert_eq!(store.receipt_count().expect("receipt count"), 1);
         assert_eq!(
             store
-                .enqueue(&fixture, NOW_MS + 1_001)
+                .enqueue(&fixture, NOW_MS + 2_001)
                 .expect("deduplicate"),
             EnqueueOutcome::Duplicate
         );

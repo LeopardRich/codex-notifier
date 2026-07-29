@@ -15,6 +15,8 @@ behavior remains documented in both root README files.
   retry recovery, and removal.
 - [`diagnostics.md`](diagnostics.md): read-only health/status contracts,
   delivery-aware local/remote self-tests, and stable exit codes.
+- [`reliability.md`](reliability.md): Stage 18 crash, duplicate, fault, load,
+  and four-path platform evidence contract.
 - [`decisions/`](decisions/): accepted architecture decisions.
 - [`verification/`](verification/): stage evidence and explicitly unverified
   platform checks.

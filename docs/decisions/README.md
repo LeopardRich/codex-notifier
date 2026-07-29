@@ -13,3 +13,4 @@ decisions link to the ADR they replace.
 | [0004](0004-ssh-topology.md) | Accepted | Direct system OpenSSH; no reverse tunnel in version 1. |
 | [0005](0005-release-channel.md) | Accepted | Signed GitHub Release artifacts with checksums and SBOM. |
 | [0006](0006-event-protocol-v1.md) | Accepted | Strict, bounded canonical JSON event protocol version 1. |
+| [0007](0007-reliability-budgets.md) | Accepted | Crash semantics and conservative hook, delivery, memory, database, and duplicate-suppression gates. |

@@ -6,7 +6,7 @@
 It turns Codex events that need human attention into native Windows or macOS
 notifications, including events produced by Codex running on a remote server.
 
-> Status: Stages 01-17 are implemented and platform-verified: compatibility evidence, architecture
+> Status: Stages 01-18 are implemented and platform-verified where the required environment is available: compatibility evidence, architecture
 > decisions, the Rust workspace, three-platform quality gates, and the
 > canonical event domain model, layered configuration, and cross-platform path
 > rules are established, together with structured redacted logging and the
@@ -37,7 +37,12 @@ notifications, including events produced by Codex running on a remote server.
 > SSH-server setup remains explicitly unverified. The Stage 17 read-only doctor,
 > role-aware status, matching human/JSON output, stable health exit codes, and
 > delivery-aware local/remote self-tests pass the Windows, macOS 14, current
-> macOS, and Linux relay gates.
+> macOS, and Linux relay gates. Stage 18 adds explicit three-window crash
+> recovery, 100-retry duplicate suppression, queue/version/offline fault
+> coverage, conservative performance/resource budgets, and a four-path
+> reliability matrix. Real remote-to-Windows and remote-to-macOS continuous
+> native paths remain explicitly unverified; Linux loopback evidence is not
+> treated as either desktop-platform result.
 
 The implementation sequence and acceptance gates are defined in
 [`stages.md`](stages.md).
@@ -316,6 +321,10 @@ agent restarts cannot exhaust delivery retries.
   text, and schema migration failures leave the source transaction unchanged.
 - Notification API success means the OS accepted the notification, not that the
   user saw or opened it.
+- A crash after native API acceptance but before the SQLite receipt commits can
+  repeat a notification after lease recovery. Recording the receipt first
+  would risk silent loss, so version 1 explicitly prefers at-least-once
+  recovery in this narrow window.
 
 ### Windows native notifications
 
@@ -758,6 +767,9 @@ CI runs the same quality gates on Windows, macOS, and a Linux relay runner.
 - Windows and macOS CI compile and test their native adapters.
 - Manual release smoke tests verify real notifications and OS permissions on
   both supported desktop platforms.
+- Stage 18 reliability gates and the four-path evidence matrix are defined in
+  [`docs/reliability.md`](docs/reliability.md); unavailable real platform paths
+  stay unverified rather than being inferred from component tests.
 - Security tests cover oversized input, malformed JSON, shell metacharacters,
   replayed event IDs, permission boundaries, and log redaction.
 
@@ -781,6 +793,7 @@ CI runs the same quality gates on Windows, macOS, and a Linux relay runner.
 | SSH | [ADR-0004](docs/decisions/0004-ssh-topology.md): direct system OpenSSH over a reachable LAN/VPN path; no reverse tunnel in version 1. |
 | Release | [ADR-0005](docs/decisions/0005-release-channel.md): signed/notarized GitHub Release artifacts with checksums and SBOM. |
 | Protocol | [ADR-0006](docs/decisions/0006-event-protocol-v1.md): strict bounded JSON envelope version 1. |
+| Reliability | [ADR-0007](docs/decisions/0007-reliability-budgets.md): explicit crash semantics and conservative release-gating resource budgets. |
 
 Signing identity identifiers remain external secrets owned by the release
 maintainer and must be fixed before the first release candidate. This is a

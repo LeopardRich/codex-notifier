@@ -133,10 +133,14 @@ fn event(label: &str) -> CanonicalEvent {
 }
 
 fn event_from(host_label: &str, label: &str) -> CanonicalEvent {
+    event_from_kind(host_label, label, EventKind::TaskCompleted)
+}
+
+fn event_from_kind(host_label: &str, label: &str, kind: EventKind) -> CanonicalEvent {
     let now = OffsetDateTime::now_utc();
     CanonicalEvent::new(
         EventId::new_v7(),
-        EventKind::TaskCompleted,
+        kind,
         now - Duration::seconds(1),
         EventSource::new(host_label, Some(label.to_owned()), None).expect("source"),
         Presentation::new(
@@ -571,6 +575,22 @@ async fn real_forced_openssh_session_enforces_the_receive_boundary() {
     assert_eq!(remote_test_acknowledgement.status(), AckStatus::Accepted);
     wait_for_deliveries(&delivery, 2).await;
 
+    let remote_approval = event_from_kind(
+        "real-ssh-approval",
+        "stage18-approval-request",
+        EventKind::ApprovalRequested,
+    );
+    let remote_approval_acknowledgement =
+        IpcClient::new(relay_endpoint.clone(), IpcPolicy::default())
+            .submit(&remote_approval)
+            .await
+            .expect("remote approval IPC submission");
+    assert_eq!(
+        remote_approval_acknowledgement.status(),
+        AckStatus::Accepted
+    );
+    wait_for_deliveries(&delivery, 3).await;
+
     let output = ssh_request(
         ssh_command(&client_key, &known_hosts),
         port,
@@ -581,7 +601,7 @@ async fn real_forced_openssh_session_enforces_the_receive_boundary() {
     let duplicate = acknowledgement(&output);
     assert_eq!(duplicate.status(), AckStatus::Duplicate);
     assert_eq!(duplicate.event_id(), relayed.event_id());
-    assert_eq!(delivery.count(), 2);
+    assert_eq!(delivery.count(), 3);
 
     let valid = event("metacharacters");
     let output = ssh_request(
@@ -594,7 +614,7 @@ async fn real_forced_openssh_session_enforces_the_receive_boundary() {
     let accepted = acknowledgement(&output);
     assert_eq!(accepted.status(), AckStatus::Accepted);
     assert_eq!(accepted.event_id(), valid.event_id());
-    wait_for_deliveries(&delivery, 3).await;
+    wait_for_deliveries(&delivery, 4).await;
     assert!(
         delivery
             .events()
@@ -668,16 +688,16 @@ async fn real_forced_openssh_session_enforces_the_receive_boundary() {
             || String::from_utf8_lossy(&output.stderr).contains("forwarding failed")
     );
 
-    assert_eq!(delivery.count(), 3);
+    assert_eq!(delivery.count(), 4);
     relay_shutdown_tx.send(()).expect("relay agent shutdown");
     let relay_report = relay_task
         .await
         .expect("relay agent task")
         .expect("relay agent run");
     assert!(relay_report.agent.retried >= 1);
-    assert_eq!(relay_report.agent.delivered, 2);
+    assert_eq!(relay_report.agent.delivered, 3);
     assert_eq!(relay_report.agent.dead_lettered, 0);
     shutdown_tx.send(()).expect("agent shutdown");
     let report = agent_task.await.expect("agent task").expect("agent run");
-    assert_eq!(report.agent.delivered, 3);
+    assert_eq!(report.agent.delivered, 4);
 }

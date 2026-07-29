@@ -6,7 +6,7 @@
 Codex 事件转换为 Windows 或 macOS 原生系统通知，并支持 Codex 运行在远程
 服务器上的场景。
 
-> 当前状态：阶段 01-17 已实现并通过平台验证，兼容性证据、架构决策、Rust workspace、三平台
+> 当前状态：阶段 01-18 已实现，并在具备所需环境的平台上通过验证；兼容性证据、架构决策、Rust workspace、三平台
 > 质量门禁、规范事件领域模型、分层配置、跨平台路径规则与结构化脱敏日志模型均已
 > 建立，事务性 SQLite 发件箱/去重存储、有界的用户级本地 IPC、角色感知 agent
 > 生命周期、持久背压和有界 worker 排空也已完成；Codex CLI 0.144.5 的 CLI
@@ -25,7 +25,10 @@ Codex 事件转换为 Windows 或 macOS 原生系统通知，并支持 Codex 运
 > 有界死信完成重试。同一 Linux 测试架构已验证离线排队、自动恢复、至少一次重发与
 > 桌面端去重。Windows/macOS SSH 服务端配置仍明确标记为未验证。阶段 17 的只读
 > doctor、角色感知 status、人类/JSON 一致输出、稳定健康退出码，以及感知投递结果的
-> 本地/远程自测均已通过 Windows、macOS 14、当前 macOS 与 Linux relay 门禁。
+> 本地/远程自测均已通过 Windows、macOS 14、当前 macOS 与 Linux relay 门禁。阶段 18
+> 进一步加入三个崩溃窗口的恢复、100 次重试去重、队列/版本/离线故障覆盖、保守的性能与
+> 资源预算，以及四条路径的可靠性矩阵。真实的远程到 Windows 和远程到 macOS 连续原生
+> 路径仍明确标记为未验证；Linux loopback 证据不作为任何桌面平台的验证结果。
 
 实施顺序与各阶段验收门槛见 [`stages.md`](stages.md)。
 
@@ -274,6 +277,8 @@ SSH，`relay` 初始化 SSH 投递端口而不初始化原生通知 API。中继
 - 发件箱行在取得租约时会重新校验其索引事件 ID 和类型。回执与死信不包含规范 JSON
   或展示正文，schema 迁移失败会保持源事务不变。
 - 系统通知 API 返回成功只代表操作系统接受了通知，不代表用户已经看到或打开。
+- 若进程在原生 API 接受通知后、SQLite 回执提交前崩溃，租约恢复后可能再次显示通知。
+  若提前记录回执则可能造成静默丢失，因此版本 1 在这个狭窄窗口中明确选择至少一次恢复。
 
 ### Windows 原生通知
 
@@ -644,6 +649,9 @@ CI 在 Windows、macOS 和 Linux relay runner 上执行相同质量门禁。
 - 适配器测试按 Codex 版本使用脱敏后的真实载荷样本。
 - Windows 与 macOS CI 分别编译并测试各自的原生通知适配器。
 - 发布前在两个桌面平台手工验证真实通知与系统权限。
+- 阶段 18 的可靠性门禁与四路径证据矩阵定义在
+  [`docs/reliability.md`](docs/reliability.md)；无法执行的真实平台路径保持“未验证”，
+  不从组件测试推断平台结论。
 - 安全测试覆盖超大输入、异常 JSON、Shell 元字符、重复事件 ID、权限边界和日志脱敏。
 
 ## 发布路线
@@ -665,6 +673,7 @@ CI 在 Windows、macOS 和 Linux relay runner 上执行相同质量门禁。
 | SSH | [ADR-0004](docs/decisions/0004-ssh-topology.md)：通过可达局域网/VPN 使用系统 OpenSSH 正向连接，版本 1 不提供反向隧道。 |
 | 发布 | [ADR-0005](docs/decisions/0005-release-channel.md)：通过 GitHub Releases 发布签名/公证产物、校验和与 SBOM。 |
 | 协议 | [ADR-0006](docs/decisions/0006-event-protocol-v1.md)：严格且有界的 JSON 事件信封版本 1。 |
+| 可靠性 | [ADR-0007](docs/decisions/0007-reliability-budgets.md)：明确的崩溃语义与保守的发布门禁资源预算。 |
 
 签名身份标识属于发布负责人管理的外部秘密，必须在首个发布候选前确定。这是发布
 门禁，而不是尚未解决的协议或产品行为决策。

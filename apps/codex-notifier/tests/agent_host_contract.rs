@@ -1,14 +1,15 @@
 //! Real IPC/SQLite composition, single-instance, and shutdown contract tests.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::fs;
 use std::io::Write;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration as StdDuration;
+use std::time::{Duration as StdDuration, Instant};
 
 use codex_notifier::{
-    AgentHost, ApprovalRequestedEmitter, EmitError, HostError, TaskCompletedEmitter,
+    AgentHost, ApprovalRequestedEmitter, EmitError, HostError, TaskCompletedEmitter, database_path,
 };
 use codex_notifier_application::{
     AgentError, AgentLease, AgentPolicy, AgentQueue, AgentQueueError, AgentRuntime, AgentState,
@@ -26,6 +27,11 @@ use codex_notifier_ipc::{AckStatus, IpcClient, IpcEndpoint, IpcError, IpcPolicy}
 use tempfile::TempDir;
 use time::{Duration, OffsetDateTime};
 use tokio::sync::oneshot;
+
+const HOOK_RETURN_LIMIT: StdDuration = StdDuration::from_secs(5);
+const BATCH_DELIVERY_LIMIT: StdDuration = StdDuration::from_secs(10);
+const PROCESS_RSS_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
+const DATABASE_SIZE_LIMIT_BYTES: u64 = 8 * 1024 * 1024;
 
 static NEXT_PROFILE: AtomicUsize = AtomicUsize::new(0);
 
@@ -312,7 +318,13 @@ fn approval_requested_payload() -> Vec<u8> {
     serde_json::to_vec(&payload).expect("app-server payload")
 }
 
-async fn run_emit_child(event_name: &str, payload: &[u8], directory: &TempDir, ipc_profile: &str) {
+async fn run_emit_child(
+    event_name: &str,
+    payload: &[u8],
+    directory: &TempDir,
+    ipc_profile: &str,
+) -> StdDuration {
+    let started = Instant::now();
     let mut child = Command::new(env!("CARGO_BIN_EXE_codex-notifier"))
         .args([
             "emit",
@@ -356,6 +368,26 @@ async fn run_emit_child(event_name: &str, payload: &[u8], directory: &TempDir, i
         "emit failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    started.elapsed()
+}
+
+fn process_rss_bytes() -> u64 {
+    let system = sysinfo::System::new_all();
+    system
+        .process(sysinfo::Pid::from_u32(std::process::id()))
+        .map_or(0, sysinfo::Process::memory)
+}
+
+fn database_footprint(path: &std::path::Path) -> u64 {
+    [
+        path.to_path_buf(),
+        path.with_extension("sqlite3-wal"),
+        path.with_extension("sqlite3-shm"),
+    ]
+    .iter()
+    .filter_map(|candidate| fs::metadata(candidate).ok())
+    .map(|metadata| metadata.len())
+    .sum()
 }
 
 fn doctor_output(version: &str, interface: &str) -> String {
@@ -393,6 +425,16 @@ fn config_with_user(
     profile: &str,
     user_toml: Option<&str>,
 ) -> Config {
+    config_with_user_and_queue_limit(directory, role, profile, user_toml, 16)
+}
+
+fn config_with_user_and_queue_limit(
+    directory: &TempDir,
+    role: &str,
+    profile: &str,
+    user_toml: Option<&str>,
+    queue_limit: usize,
+) -> Config {
     #[cfg(windows)]
     let paths = PathEnvironment::new()
         .with_windows_app_data(directory.path())
@@ -415,7 +457,7 @@ fn config_with_user(
         .with_role(role)
         .with_profile(profile)
         .with_state_dir(directory.path())
-        .with_max_queue_entries(16);
+        .with_max_queue_entries(queue_limit);
     if role == "relay" {
         cli = cli.with_relay_host("desktop-test");
     }
@@ -498,20 +540,28 @@ async fn codex_event_stdin_emit_reaches_agent_without_sensitive_values() {
     });
     wait_ready(&runtime).await;
 
-    run_emit_child(
+    let task_elapsed = run_emit_child(
         "task-completed",
         &task_completed_payload(),
         &directory,
         &ipc_profile,
     )
     .await;
-    run_emit_child(
+    let approval_elapsed = run_emit_child(
         "approval-requested",
         &approval_requested_payload(),
         &directory,
         &ipc_profile,
     )
     .await;
+    assert!(
+        task_elapsed <= HOOK_RETURN_LIMIT,
+        "task hook took {task_elapsed:?}"
+    );
+    assert!(
+        approval_elapsed <= HOOK_RETURN_LIMIT,
+        "approval hook took {approval_elapsed:?}"
+    );
 
     let submissions = queue.submissions();
     assert_eq!(submissions.len(), 2);
@@ -552,6 +602,232 @@ async fn codex_event_stdin_emit_reaches_agent_without_sensitive_values() {
 
     shutdown_tx.send(()).expect("shutdown");
     runner.await.expect("runner").expect("host run");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn source_emit_ipc_sqlite_and_desktop_delivery_form_one_durable_path() {
+    let directory = test_directory();
+    let profile = format!(
+        "se{}_{}",
+        std::process::id(),
+        NEXT_PROFILE.fetch_add(1, Ordering::Relaxed)
+    );
+    let config = config_with_user_and_queue_limit(&directory, "desktop", &profile, None, 8);
+    let factory = TestFactory::new(TestDelivery::immediate());
+    let host = AgentHost::from_config(&config, &factory).expect("desktop host");
+    let runtime = host.runtime();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let runner = tokio::spawn(async move {
+        host.run_until(async {
+            let _ = shutdown_rx.await;
+        })
+        .await
+    });
+    wait_ready(&runtime).await;
+
+    let task_elapsed = run_emit_child(
+        "task-completed",
+        &task_completed_payload(),
+        &directory,
+        &profile,
+    )
+    .await;
+    let approval_elapsed = run_emit_child(
+        "approval-requested",
+        &approval_requested_payload(),
+        &directory,
+        &profile,
+    )
+    .await;
+    assert!(task_elapsed <= HOOK_RETURN_LIMIT);
+    assert!(approval_elapsed <= HOOK_RETURN_LIMIT);
+    tokio::time::timeout(StdDuration::from_secs(2), async {
+        while factory.delivery.delivered.load(Ordering::Acquire) != 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("both native-bound deliveries");
+
+    shutdown_tx.send(()).expect("shutdown");
+    let report = runner.await.expect("runner").expect("host run");
+    assert_eq!(report.agent.delivered, 2);
+    let snapshot = codex_notifier_persistence::SqliteStore::inspect_read_only(&database_path(
+        directory.path(),
+    ))
+    .expect("durable snapshot");
+    assert_eq!(snapshot.queue_entries(), 0);
+    assert_eq!(snapshot.receipt_entries(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hundred_event_load_stays_within_latency_memory_and_database_bounds() {
+    let directory = test_directory();
+    let profile = format!(
+        "lb{}_{}",
+        std::process::id(),
+        NEXT_PROFILE.fetch_add(1, Ordering::Relaxed)
+    );
+    let config = config_with_user_and_queue_limit(&directory, "desktop", &profile, None, 256);
+    let endpoint = IpcEndpoint::new(directory.path().join("run"), &profile).expect("endpoint");
+    let factory = TestFactory::new(TestDelivery::immediate());
+    let host = AgentHost::from_config(&config, &factory).expect("desktop host");
+    let runtime = host.runtime();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let runner = tokio::spawn(async move {
+        host.run_until(async {
+            let _ = shutdown_rx.await;
+        })
+        .await
+    });
+    wait_ready(&runtime).await;
+
+    let started = Instant::now();
+    let client = IpcClient::new(endpoint, IpcPolicy::default());
+    for index in 1_000..1_100 {
+        let acknowledgement = client.submit(&event(index)).await.expect("load submission");
+        assert_eq!(acknowledgement.status(), AckStatus::Accepted);
+    }
+    tokio::time::timeout(BATCH_DELIVERY_LIMIT, async {
+        while factory.delivery.delivered.load(Ordering::Acquire) != 100 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("100-event delivery deadline");
+    let delivery_elapsed = started.elapsed();
+    let rss_bytes = process_rss_bytes();
+
+    shutdown_tx.send(()).expect("shutdown");
+    let report = runner.await.expect("runner").expect("host run");
+    let database = database_path(directory.path());
+    let database_bytes = database_footprint(&database);
+    let snapshot = codex_notifier_persistence::SqliteStore::inspect_read_only(&database)
+        .expect("durable snapshot");
+    eprintln!(
+        "stage18_baseline events=100 elapsed_ms={} rss_bytes={rss_bytes} database_bytes={database_bytes}",
+        delivery_elapsed.as_millis()
+    );
+    assert!(delivery_elapsed <= BATCH_DELIVERY_LIMIT);
+    assert!(rss_bytes > 0);
+    assert!(rss_bytes <= PROCESS_RSS_LIMIT_BYTES);
+    assert!(database_bytes > 0);
+    assert!(database_bytes <= DATABASE_SIZE_LIMIT_BYTES);
+    assert_eq!(report.agent.delivered, 100);
+    assert!(report.agent.peak_active_deliveries <= 4);
+    assert_eq!(snapshot.queue_entries(), 0);
+    assert_eq!(snapshot.receipt_entries(), 100);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hundred_duplicate_retries_produce_one_desktop_delivery() {
+    let directory = test_directory();
+    let profile = format!(
+        "dd{}_{}",
+        std::process::id(),
+        NEXT_PROFILE.fetch_add(1, Ordering::Relaxed)
+    );
+    let config = config_with_user_and_queue_limit(&directory, "desktop", &profile, None, 8);
+    let endpoint = IpcEndpoint::new(directory.path().join("run"), &profile).expect("endpoint");
+    let factory = TestFactory::new(TestDelivery::immediate());
+    let host = AgentHost::from_config(&config, &factory).expect("desktop host");
+    let runtime = host.runtime();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let runner = tokio::spawn(async move {
+        host.run_until(async {
+            let _ = shutdown_rx.await;
+        })
+        .await
+    });
+    wait_ready(&runtime).await;
+
+    let fixture = event(2_000);
+    let client = IpcClient::new(endpoint, IpcPolicy::default());
+    assert_eq!(
+        client
+            .submit(&fixture)
+            .await
+            .expect("initial submission")
+            .status(),
+        AckStatus::Accepted
+    );
+    tokio::time::timeout(StdDuration::from_secs(2), async {
+        while factory.delivery.delivered.load(Ordering::Acquire) != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("initial delivery");
+    for _ in 0..100 {
+        assert_eq!(
+            client
+                .submit(&fixture)
+                .await
+                .expect("duplicate retry")
+                .status(),
+            AckStatus::Duplicate
+        );
+    }
+    tokio::time::sleep(StdDuration::from_millis(50)).await;
+    assert_eq!(factory.delivery.delivered.load(Ordering::Acquire), 1);
+
+    shutdown_tx.send(()).expect("shutdown");
+    let report = runner.await.expect("runner").expect("host run");
+    assert_eq!(report.agent.delivered, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn full_queue_rejects_new_ipc_work_without_losing_the_leased_event() {
+    let directory = test_directory();
+    let profile = format!(
+        "qf{}_{}",
+        std::process::id(),
+        NEXT_PROFILE.fetch_add(1, Ordering::Relaxed)
+    );
+    let config = config_with_user_and_queue_limit(&directory, "desktop", &profile, None, 1);
+    let endpoint = IpcEndpoint::new(directory.path().join("run"), &profile).expect("endpoint");
+    let factory = TestFactory::new(TestDelivery::cancel_aware());
+    let host = AgentHost::from_config(&config, &factory).expect("desktop host");
+    let runtime = host.runtime();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let runner = tokio::spawn(async move {
+        host.run_until(async {
+            let _ = shutdown_rx.await;
+        })
+        .await
+    });
+    wait_ready(&runtime).await;
+    let client = IpcClient::new(endpoint, IpcPolicy::default());
+    assert_eq!(
+        client
+            .submit(&event(3_000))
+            .await
+            .expect("first event")
+            .status(),
+        AckStatus::Accepted
+    );
+    tokio::time::timeout(StdDuration::from_secs(2), async {
+        while factory.delivery.active.load(Ordering::Acquire) != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("leased event");
+    let rejected = client.submit(&event(3_001)).await.expect("queue rejection");
+    assert_eq!(rejected.status(), AckStatus::Rejected);
+    let error = rejected.error().expect("safe queue-full error");
+    assert_eq!(error.code(), "agent_queue_full");
+    assert!(error.retryable());
+
+    shutdown_tx.send(()).expect("shutdown");
+    let report = runner.await.expect("runner").expect("host run");
+    assert_eq!(report.agent.released, 1);
+    let snapshot = codex_notifier_persistence::SqliteStore::inspect_read_only(&database_path(
+        directory.path(),
+    ))
+    .expect("durable snapshot");
+    assert_eq!(snapshot.queue_entries(), 1);
+    assert_eq!(snapshot.receipt_entries(), 0);
 }
 
 #[tokio::test]
