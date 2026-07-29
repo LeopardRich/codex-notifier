@@ -99,17 +99,17 @@ impl WindowsNotificationBackend {
     }
 
     fn notifier(&self) -> Result<ToastNotifier, NotificationError> {
-        match self.host {
-            HostStatus::Desktop => {}
-            HostStatus::Server => return Err(NotificationError::UnsupportedPlatform),
-            HostStatus::Unknown => return Err(NotificationError::Unavailable),
-        }
         match self.session {
             SessionStatus::Interactive => {}
             SessionStatus::NonInteractive => {
                 return Err(NotificationError::NoInteractiveSession);
             }
             SessionStatus::Unknown => return Err(NotificationError::Unavailable),
+        }
+        match self.host {
+            HostStatus::Desktop => {}
+            HostStatus::Server => return Err(NotificationError::UnsupportedPlatform),
+            HostStatus::Unknown => return Err(NotificationError::Unavailable),
         }
         match self.registration {
             ApplicationRegistrationStatus::Registered => {}
@@ -459,6 +459,21 @@ mod tests {
             HostStatus::Server
         );
         assert_eq!(classify_installation_type(None), HostStatus::Unknown);
+    }
+
+    #[test]
+    fn noninteractive_session_diagnostic_precedes_host_classification() {
+        let backend = WindowsNotificationBackend {
+            application_id: WindowsApplicationId(CODEX_NOTIFIER_APP_ID.to_owned()),
+            host: HostStatus::Server,
+            session: SessionStatus::NonInteractive,
+            registration: ApplicationRegistrationStatus::Missing,
+        };
+
+        assert!(matches!(
+            backend.notifier(),
+            Err(NotificationError::NoInteractiveSession)
+        ));
     }
 
     #[test]
