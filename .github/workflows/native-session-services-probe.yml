@@ -264,16 +264,31 @@ jobs:
             Add-Type -AssemblyName UIAutomationClient
             Add-Type -AssemblyName UIAutomationTypes
             $root = [System.Windows.Automation.AutomationElement]::RootElement
-            $textCondition = New-Object System.Windows.Automation.PropertyCondition(
-              [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-              [System.Windows.Automation.ControlType]::Text)
-            @($root.FindAll(
+            $allElements = $root.FindAll(
               [System.Windows.Automation.TreeScope]::Descendants,
-              $textCondition) | Where-Object {
+              [System.Windows.Automation.Condition]::TrueCondition)
+            $expander = $allElements | Where-Object {
+              $_.Current.Name -match '^\+\d+ notifications$'
+            } | Select-Object -First 1
+            if ($expander) {
+              $invoke = [System.Windows.Automation.InvokePattern]$expander.GetCurrentPattern(
+                [System.Windows.Automation.InvokePattern]::Pattern)
+              $invoke.Invoke()
+              Start-Sleep -Seconds 1
+              Save-ProbeScreen 'target\windows11-notification-center-expanded.png'
+            }
+            $allElements = $root.FindAll(
+              [System.Windows.Automation.TreeScope]::Descendants,
+              [System.Windows.Automation.Condition]::TrueCondition)
+            $centerEntries = @($allElements | Where-Object {
                 $_.Current.Name -match 'Codex Notifier|Codex task finished|Codex needs approval|Open Codex'
               } | ForEach-Object {
                 "Name=$($_.Current.Name) AutomationId=$($_.Current.AutomationId)"
-              }) | Set-Content target\windows11-notification-center.txt
+              })
+            if ($centerEntries.Count -eq 0) {
+              $centerEntries = @('No matching accessible notification text')
+            }
+            Set-Content -Path target\windows11-notification-center.txt -Value $centerEntries
             [ProbeNotificationCenter]::Toggle()
 
             $database = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Notifications\wpndatabase.db'
@@ -340,6 +355,15 @@ jobs:
             echo 'Notification launch items:'
           } >target/macos-session-services.txt 2>&1
 
+          if launchctl print-disabled "gui/$uid" |
+            grep -q '"com.apple.notificationcenterui.agent" => disabled'; then
+            echo disabled >target/macos-notificationcenterui-original-state.txt
+            launchctl enable "gui/$uid/com.apple.notificationcenterui.agent" \
+              >>target/macos-session-services.txt 2>&1
+          else
+            echo enabled >target/macos-notificationcenterui-original-state.txt
+          fi
+
           for directory in /System/Library/LaunchAgents /System/Library/LaunchDaemons; do
             for plist in "$directory"/*[Nn]otification*.plist "$directory"/*[Uu]ser[Nn]ot*.plist; do
               [[ -e "$plist" ]] || continue
@@ -373,6 +397,8 @@ jobs:
             pgrep -lf 'WindowServer|loginwindow|NotificationCenter|UserNotificationCenter|usernotificationsd|usernoted'
             echo 'GUI notification services after:'
             launchctl print "gui/$uid" | grep -i -C 2 notification
+            echo 'Disabled overrides after enable:'
+            launchctl print-disabled "gui/$uid"
           } >>target/macos-session-services.txt 2>&1
 
       - name: Prepare screen-capture evidence
@@ -633,6 +659,12 @@ jobs:
           fi
           if [[ -n "${CODEX_NOTIFIER_MACOS_SIGNING_DIRECTORY:-}" ]]; then
             rm -rf "$CODEX_NOTIFIER_MACOS_SIGNING_DIRECTORY"
+          fi
+          if grep -q '^disabled$' \
+            target/macos-notificationcenterui-original-state.txt 2>/dev/null; then
+            uid="$(id -u)"
+            launchctl bootout "gui/$uid/com.apple.notificationcenterui.agent"
+            launchctl disable "gui/$uid/com.apple.notificationcenterui.agent"
           fi
 
       - name: Upload macOS evidence
