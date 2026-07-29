@@ -1,5 +1,10 @@
 //! Executable composition root and user-level agent host.
 
+pub mod desktop;
+pub mod installer;
+pub mod lifecycle;
+pub mod platform;
+
 use std::future::Future;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};

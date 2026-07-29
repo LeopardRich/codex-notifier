@@ -3,13 +3,19 @@
 use std::fmt;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
-use objc2_foundation::NSBundle;
+use block2::RcBlock;
+use objc2::{MainThreadMarker, runtime::Bool};
+use objc2_app_kit::{NSApplication, NSEventMask};
+use objc2_foundation::{NSBundle, NSDate, NSError, NSString};
+use objc2_user_notifications::{UNAuthorizationOptions, UNUserNotificationCenter};
 use rustix::process::geteuid;
 use usernotifications::{
-    AuthorizationOptions, AuthorizationStatus, NotificationContent, NotificationInterruptionLevel,
-    NotificationRequest, NotificationSetting, NotificationSettings, NotificationSound,
-    USER_NOTIFICATIONS_ERROR_DOMAIN, UserNotificationCenter, UserNotificationsError,
+    AuthorizationStatus, NotificationContent, NotificationInterruptionLevel, NotificationRequest,
+    NotificationSetting, NotificationSettings, NotificationSound, USER_NOTIFICATIONS_ERROR_DOMAIN,
+    UserNotificationCenter, UserNotificationsError,
 };
 
 use crate::{
@@ -20,6 +26,7 @@ use crate::{
 /// Stable bundle identifier owned by the macOS package.
 pub const CODEX_NOTIFIER_BUNDLE_ID: &str = "io.github.leopardrich.codex-notifier";
 const MAX_BUNDLE_ID_BYTES: usize = 255;
+const AUTHORIZATION_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Strict reverse-DNS application bundle identifier.
 #[derive(Clone, Eq, PartialEq)]
@@ -98,21 +105,63 @@ impl MacOsNotificationBackend {
     ///
     /// Returns a stable identity, session, denial, or native API error.
     pub fn request_authorization(&self) -> Result<(), NotificationError> {
-        let center = self.center()?;
-        let granted = center
-            .request_authorization(AuthorizationOptions::ALERT | AuthorizationOptions::SOUND)
-            .map_err(|_| NotificationError::Unavailable)?;
-        if !granted {
-            return Err(NotificationError::DisabledForApplication);
-        }
-        let settings = center
+        self.check_application_identity()?;
+        self.check_session()?;
+        let main_thread = MainThreadMarker::new().ok_or(NotificationError::Unavailable)?;
+        let application = NSApplication::sharedApplication(main_thread);
+        application.finishLaunching();
+        application.activate();
+
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let completion = RcBlock::new(move |granted: Bool, error: *mut NSError| {
+            let _ = sender.send((granted.as_bool(), error.is_null()));
+        });
+        let center = UNUserNotificationCenter::currentNotificationCenter();
+        center.requestAuthorizationWithOptions_completionHandler(
+            UNAuthorizationOptions::Alert | UNAuthorizationOptions::Sound,
+            &completion,
+        );
+        let deadline = Instant::now() + AUTHORIZATION_TIMEOUT;
+        let default_run_loop_mode = NSString::from_str("kCFRunLoopDefaultMode");
+        let (granted, error_free) = loop {
+            match receiver.try_recv() {
+                Ok(result) => break result,
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    return Err(NotificationError::Unavailable);
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err(NotificationError::Unavailable);
+            }
+            let next_poll = NSDate::dateWithTimeIntervalSinceNow(0.05);
+            if let Some(event) = application.nextEventMatchingMask_untilDate_inMode_dequeue(
+                NSEventMask::Any,
+                Some(&next_poll),
+                &default_run_loop_mode,
+                true,
+            ) {
+                application.sendEvent(&event);
+            }
+        };
+        let settings = UserNotificationCenter::current()
+            .map_err(|_| NotificationError::Unavailable)?
             .notification_settings()
             .map_err(|_| NotificationError::Unavailable)?;
-        settings_error(&settings)
+        if granted && error_free {
+            settings_error(&settings)
+        } else {
+            settings_error(&settings).and(Err(NotificationError::DisabledForApplication))
+        }
     }
 
     fn center(&self) -> Result<UserNotificationCenter, NotificationError> {
         self.check_application_identity()?;
+        self.check_session()?;
+        UserNotificationCenter::current().map_err(|_| NotificationError::Unavailable)
+    }
+
+    fn check_session(&self) -> Result<(), NotificationError> {
         match self.session {
             SessionStatus::Interactive => {}
             SessionStatus::NonInteractive => {
@@ -120,7 +169,7 @@ impl MacOsNotificationBackend {
             }
             SessionStatus::Unknown => return Err(NotificationError::Unavailable),
         }
-        UserNotificationCenter::current().map_err(|_| NotificationError::Unavailable)
+        Ok(())
     }
 
     fn ready_center(&self) -> Result<UserNotificationCenter, NotificationError> {

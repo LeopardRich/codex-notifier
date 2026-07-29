@@ -16,22 +16,21 @@ mod macos {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
-    use std::sync::{Arc, mpsc};
+    use std::sync::Arc;
     use std::thread;
     use std::time::{Duration, Instant};
 
-    use block2::RcBlock;
     use codex_notifier_core::{
         CanonicalEvent, EventId, EventKind, EventSource, Extensions, Presentation, Privacy, Urgency,
     };
     use codex_notifier_native_notification::{
         CODEX_NOTIFIER_BUNDLE_ID, MacOsNotificationBackend, NativeNotificationAdapter,
-        NotificationBackend, NotificationContentPolicy, NotificationPolicy, NotificationStatus,
+        NotificationBackend, NotificationContentPolicy, NotificationError, NotificationPolicy,
+        NotificationStatus,
     };
-    use objc2::{MainThreadMarker, runtime::Bool};
+    use objc2::MainThreadMarker;
     use objc2_app_kit::{NSApplication, NSEventMask};
-    use objc2_foundation::{NSDate, NSError, NSString};
-    use objc2_user_notifications::{UNAuthorizationOptions, UNUserNotificationCenter};
+    use objc2_foundation::{NSDate, NSString};
     use tempfile::Builder;
     use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -228,78 +227,49 @@ mod macos {
     }
 
     fn request_authorization_with_application_run_loop(expectation: AuthorizationExpectation) {
-        let main_thread = MainThreadMarker::new().expect("smoke app must start on the main thread");
-        let application = NSApplication::sharedApplication(main_thread);
-        application.finishLaunching();
-        application.activate();
-
-        let (sender, receiver) = mpsc::sync_channel(1);
-        let completion = RcBlock::new(move |granted: Bool, error: *mut NSError| {
-            sender
-                .send((granted.as_bool(), error.is_null()))
-                .expect("authorization result receiver must remain connected");
-        });
-        let center = UNUserNotificationCenter::currentNotificationCenter();
-        center.requestAuthorizationWithOptions_completionHandler(
-            UNAuthorizationOptions::Alert | UNAuthorizationOptions::Sound,
-            &completion,
+        let result = MacOsNotificationBackend::codex_notifier().request_authorization();
+        let diagnostic = MacOsNotificationBackend::codex_notifier().diagnose();
+        if expectation == AuthorizationExpectation::Denial {
+            assert_eq!(
+                result,
+                Err(NotificationError::DisabledForApplication),
+                "macOS denial authorization result; diagnostic={diagnostic:?}"
+            );
+            assert_eq!(
+                diagnostic.status(),
+                NotificationStatus::DisabledForApplication,
+                "macOS denial diagnostic: {diagnostic:?}"
+            );
+            eprintln!(
+                "macOS notification authorization denied as expected; diagnostic={diagnostic:?}"
+            );
+            return;
+        }
+        if result.is_ok() {
+            return;
+        }
+        let recover_authorization = std::env::var_os(RECOVER_AUTHORIZATION_ENV).is_some();
+        assert!(
+            recover_authorization,
+            "macOS notification authorization failed; error={:?}, diagnostic={diagnostic:?}",
+            result.err()
+        );
+        eprintln!(
+            "macOS notification authorization requires System Settings recovery; error={:?}, diagnostic={diagnostic:?}",
+            result.err()
         );
 
+        let main_thread = MainThreadMarker::new().expect("smoke app must start on the main thread");
+        let application = NSApplication::sharedApplication(main_thread);
         let deadline = Instant::now() + AUTHORIZATION_TIMEOUT;
         let default_run_loop_mode = NSString::from_str("kCFRunLoopDefaultMode");
-        let recover_authorization = std::env::var_os(RECOVER_AUTHORIZATION_ENV).is_some();
-        let mut awaiting_settings_grant = false;
-        let mut next_diagnostic_at = Instant::now();
         loop {
-            if awaiting_settings_grant && Instant::now() >= next_diagnostic_at {
-                let diagnostic = MacOsNotificationBackend::codex_notifier().diagnose();
-                if diagnostic.status() == NotificationStatus::Ready {
-                    eprintln!(
-                        "macOS notification authorization recovered through System Settings; diagnostic={diagnostic:?}"
-                    );
-                    break;
-                }
-                next_diagnostic_at = Instant::now() + Duration::from_millis(500);
-            }
-            match receiver.try_recv() {
-                Ok((granted, error_free)) => {
-                    if !error_free || !granted {
-                        let diagnostic = MacOsNotificationBackend::codex_notifier().diagnose();
-                        if expectation == AuthorizationExpectation::Denial {
-                            assert_eq!(
-                                diagnostic.status(),
-                                NotificationStatus::DisabledForApplication,
-                                "macOS denial diagnostic: {diagnostic:?}"
-                            );
-                            eprintln!(
-                                "macOS notification authorization denied as expected; granted={granted}, error_free={error_free}, diagnostic={diagnostic:?}"
-                            );
-                            break;
-                        }
-                        if recover_authorization {
-                            eprintln!(
-                                "macOS notification authorization requires System Settings recovery; granted={granted}, error_free={error_free}, diagnostic={diagnostic:?}"
-                            );
-                            awaiting_settings_grant = true;
-                        } else {
-                            panic!(
-                                "macOS notification authorization failed; granted={granted}, error_free={error_free}, diagnostic={diagnostic:?}"
-                            );
-                        }
-                    }
-                    if granted && error_free {
-                        assert_eq!(
-                            expectation,
-                            AuthorizationExpectation::Grant,
-                            "macOS unexpectedly granted authorization in the denial smoke test"
-                        );
-                        break;
-                    }
-                }
-                Err(mpsc::TryRecvError::Empty) => {}
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    panic!("authorization callback disconnected without a result");
-                }
+            let diagnostic = MacOsNotificationBackend::codex_notifier().diagnose();
+            if diagnostic.status() == NotificationStatus::Ready {
+                eprintln!(
+                    "macOS notification authorization recovered through System Settings; diagnostic={diagnostic:?}"
+                );
+                break;
             }
             assert!(
                 Instant::now() < deadline,

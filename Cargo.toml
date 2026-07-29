@@ -46,7 +46,7 @@ rusqlite = { version = "0.37.0", features = ["bundled"] }
 sysinfo = { version = "0.36.1", default-features = false, features = ["system"] }
 thiserror = "2.0.12"
 time = { version = "0.3.41", features = ["formatting", "parsing"] }
-tokio = { version = "1.46.1", features = ["io-util", "macros", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1.46.1", features = ["io-util", "macros", "rt-multi-thread", "signal", "sync", "time"] }
 toml = "0.9.5"
 unicode-normalization = "0.1.24"
 uuid = { version = "1.16.0", features = ["v7"] }

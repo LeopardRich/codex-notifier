@@ -27,7 +27,11 @@ windows = { workspace = true, features = [
 winreg.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
+block2.workspace = true
+objc2.workspace = true
+objc2-app-kit.workspace = true
 objc2-foundation.workspace = true
+objc2-user-notifications.workspace = true
 rustix.workspace = true
 usernotifications-rs.workspace = true
 
@@ -35,10 +39,6 @@ usernotifications-rs.workspace = true
 time.workspace = true
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
-block2.workspace = true
-objc2.workspace = true
-objc2-app-kit.workspace = true
-objc2-user-notifications.workspace = true
 tempfile.workspace = true
 
 [lints]
