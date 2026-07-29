@@ -6,7 +6,7 @@
 Codex 事件转换为 Windows 或 macOS 原生系统通知，并支持 Codex 运行在远程
 服务器上的场景。
 
-> 当前状态：阶段 01-18 已实现，并在具备所需环境的平台上通过验证；兼容性证据、架构决策、Rust workspace、三平台
+> 当前状态：阶段 01-19 已实现，并在具备所需环境的平台上通过验证；兼容性证据、架构决策、Rust workspace、三平台
 > 质量门禁、规范事件领域模型、分层配置、跨平台路径规则与结构化脱敏日志模型均已
 > 建立，事务性 SQLite 发件箱/去重存储、有界的用户级本地 IPC、角色感知 agent
 > 生命周期、持久背压和有界 worker 排空也已完成；Codex CLI 0.144.5 的 CLI
@@ -28,7 +28,11 @@ Codex 事件转换为 Windows 或 macOS 原生系统通知，并支持 Codex 运
 > 本地/远程自测均已通过 Windows、macOS 14、当前 macOS 与 Linux relay 门禁。阶段 18
 > 进一步加入三个崩溃窗口的恢复、100 次重试去重、队列/版本/离线故障覆盖、保守的性能与
 > 资源预算，以及四条路径的可靠性矩阵。真实的远程到 Windows 和远程到 macOS 连续原生
-> 路径仍明确标记为未验证；Linux loopback 证据不作为任何桌面平台的验证结果。
+> 路径仍明确标记为未验证；Linux loopback 证据不作为任何桌面平台的验证结果。阶段 19
+> 新增带版本的 Windows x86-64、macOS universal 与 Linux x86-64/AArch64 验证归档、
+> 校验和、SPDX 与许可证材料、package 生命周期门禁，以及默认关闭的受保护签名、公证与
+> 发布任务。所有分支验证 package 和聚合归档均已通过。生产 Windows 签名、Apple
+> Developer ID/公证与受保护 tag 运行仍未验证，因此这些未签名或 ad-hoc 产物不是发布候选。
 
 实施顺序与各阶段验收门槛见 [`stages.md`](stages.md)。
 
@@ -91,7 +95,8 @@ Codex 的事件能力可能随版本和使用界面而变化，因此所有集�
 前必须报告为不可用。详见 [`docs/compatibility.md`](docs/compatibility.md) 与
 [ADR-0001](docs/decisions/0001-supported-versions.md)。初始操作系统构建下限为
 Windows 10 22H2（19045）和 macOS 14。阶段 12 与阶段 13 已为这些平台声明提供所需
-真实状态原生通知证据；发布包签名与公证仍是阶段 19 的独立门禁。
+真实状态原生通知证据；阶段 19 已实现默认关闭的发布包签名与公证门禁，但生产身份与
+受保护 tag 路径仍未验证。
 
 ## 总体架构
 
@@ -332,8 +337,9 @@ macOS 14.8.7 与 macOS 26.4 的真实托管 runner 检查已执行首次授权�
 两个版本都没有显示探测横幅，原生日志把稳定事件 ID 与活动专注模式下的延迟投递关联
 起来，随后原有专注状态已恢复。永久 CI 还覆盖无 Aqua 会话诊断。由于仓库没有 Apple
 签名 secret，这些检查使用只在临时 runner 上受信任的签名链；Apple Developer ID
-签名、公证与可分发安装包验证仍属于阶段 19。详见
-[`docs/verification/stage-13.md`](docs/verification/stage-13.md)。
+签名与公证仍未验证。阶段 19 已验证 universal ad-hoc 归档，并实现默认关闭的受保护
+发布路径。详见 [`docs/verification/stage-13.md`](docs/verification/stage-13.md) 与
+[`docs/verification/stage-19.md`](docs/verification/stage-19.md)。
 
 ## 安全模型
 
@@ -434,8 +440,8 @@ codex-notifier agent
 应用和未修改的 installer 创建配置；预先存在或已修改的 hook/配置内容会被保留，
 SQLite 队列、投递记录和系统通知历史始终保留。Windows 上应从外部构建或下载的
 可执行文件运行 `uninstall`，因为已安装进程无法删除自身目录。macOS 上的 `install`
-必须从有效签名的 `Codex Notifier.app` 中运行。Developer ID 签名、公证和发布归档
-仍属于阶段 19。
+必须从有效签名的 `Codex Notifier.app` 中运行。阶段 19 的验证归档已在两个桌面平台
+执行该生命周期；生产 Developer ID 签名与公证仍是发布候选的阻断条件。
 
 平台所有权细节见 [`packaging/windows/README.md`](packaging/windows/README.md)
 与 [`packaging/macos/README.md`](packaging/macos/README.md)，执行证据见
@@ -487,8 +493,8 @@ retry_max_attempts = 20
 ```
 
 在远程用户会话或服务管理器中运行 `codex-notifier agent`。现有 `emit` 命令与桌面
-角色一样向其本地 IPC 端点提交事件。Linux relay 归档和受管理的 systemd 用户服务
-仍属于阶段 19 的打包工作；本阶段没有增加 Linux 通知适配器。
+角色一样向其本地 IPC 端点提交事件。阶段 19 已提供 Linux x86-64 与 AArch64 relay
+归档、可逆脚本和受管理的 systemd 用户服务；没有增加 Linux 通知适配器。
 
 对每个取得租约的事件，中继都会以固定参数数组启动系统 `ssh` 可执行文件。它强制
 批处理模式、无 PTY、无 agent 转发或配置端口转发、单次连接尝试、严格主机密钥

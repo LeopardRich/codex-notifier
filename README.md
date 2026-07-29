@@ -6,7 +6,7 @@
 It turns Codex events that need human attention into native Windows or macOS
 notifications, including events produced by Codex running on a remote server.
 
-> Status: Stages 01-18 are implemented and platform-verified where the required environment is available: compatibility evidence, architecture
+> Status: Stages 01-19 are implemented and platform-verified where the required environment is available: compatibility evidence, architecture
 > decisions, the Rust workspace, three-platform quality gates, and the
 > canonical event domain model, layered configuration, and cross-platform path
 > rules are established, together with structured redacted logging and the
@@ -42,7 +42,13 @@ notifications, including events produced by Codex running on a remote server.
 > coverage, conservative performance/resource budgets, and a four-path
 > reliability matrix. Real remote-to-Windows and remote-to-macOS continuous
 > native paths remain explicitly unverified; Linux loopback evidence is not
-> treated as either desktop-platform result.
+> treated as either desktop-platform result. Stage 19 adds versioned Windows
+> x86-64, macOS universal, and Linux x86-64/AArch64 verification archives,
+> checksums, SPDX and license materials, package lifecycle gates, and
+> fail-closed protected signing/notarization/publication jobs. All branch
+> verification packages and the aggregate bundle are green. Production Windows
+> signing, Apple Developer ID/notarization, and a protected tag run remain
+> unverified, so these unsigned/ad-hoc artifacts are not release candidates.
 
 The implementation sequence and acceptance gates are defined in
 [`stages.md`](stages.md).
@@ -110,7 +116,8 @@ unavailable until real evidence exists. See
 [ADR-0001](docs/decisions/0001-supported-versions.md). The initial OS build
 floors are Windows 10 22H2 (19045) and macOS 14. Stages 12 and 13 provide the
 required real-state native notification evidence for those platform claims;
-release-package signing and notarization remain separate Stage 19 gates.
+Stage 19 implements fail-closed release-package signing and notarization gates,
+but the production identities and protected tag path remain unverified.
 
 ## Architecture
 
@@ -398,9 +405,11 @@ Center suppressed the probe banner on both versions, and native logs tied the
 stable event ID to delayed delivery under an active Focus mode; the original
 Focus state was restored. The no-Aqua diagnostic is also covered by permanent
 CI. These checks used a temporary locally trusted signing chain because the
-repository has no Apple signing secret. Apple-issued Developer ID signing,
-notarization, and distributable-package validation remain Stage 19 work; see
-[`docs/verification/stage-13.md`](docs/verification/stage-13.md).
+repository has no Apple signing secret. Stage 19 validates the universal ad-hoc
+verification archive and implements a fail-closed protected release path;
+Apple-issued Developer ID signing and notarization remain unverified. See
+[`docs/verification/stage-13.md`](docs/verification/stage-13.md) and
+[`docs/verification/stage-19.md`](docs/verification/stage-19.md).
 
 ## Security Model
 
@@ -518,8 +527,9 @@ pre-existing or modified hook/configuration content and always retains the
 SQLite queue, receipts, and notification history. On Windows, run `uninstall`
 from an external build or downloaded executable because the installed process
 cannot remove its own directory. On macOS, `install` must run from a valid
-signed `Codex Notifier.app`. Developer ID signing, notarization, and release
-archives remain Stage 19 work.
+signed `Codex Notifier.app`. Stage 19 verification archives exercise this
+lifecycle on both desktop platforms; production Developer ID signing and
+notarization remain release-candidate blockers.
 
 See the platform-specific ownership details in
 [`packaging/windows/README.md`](packaging/windows/README.md) and
@@ -579,8 +589,9 @@ retry_max_attempts = 20
 
 Run `codex-notifier agent` under the remote user's session or service manager.
 The existing `emit` commands submit to its local IPC endpoint exactly as they
-do for a desktop role. Linux relay archives and a managed systemd user service
-remain Stage 19 packaging work; no Linux notification adapter is created.
+do for a desktop role. Stage 19 provides Linux x86-64 and AArch64 relay
+archives, reversible scripts, and a managed systemd user service; no Linux
+notification adapter is created.
 
 For every leased event, the relay starts the system `ssh` executable with a
 fixed argument array. It forces batch mode, no PTY, no agent or configured port

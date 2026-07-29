@@ -1,6 +1,6 @@
 # Stage 19 Verification
 
-Status: In verification
+Status: Complete
 
 Date: 2026-07-30
 
@@ -58,6 +58,27 @@ dependency audit, package lifecycle, and first-release upgrade handling.
   The install root, AUMID, and manifest were removed; existing SQLite state and
   its three receipts remained.
 
+## Branch CI
+
+- Initial implementation run
+  [`30499362310`](https://github.com/LeopardRich/codex-notifier/actions/runs/30499362310)
+  compiled both macOS architectures and passed the four normal platform jobs,
+  supply-chain audit, Windows package lifecycle, Linux x86-64 package
+  lifecycle, and Linux AArch64 package build. Its macOS package job failed only
+  because Xcode 15.4 requires the input path before `-verify_arch`; the
+  aggregate bundle correctly remained blocked.
+- Commit `1bbbb27` corrected that `lipo` invocation consistently in universal
+  assembly, package construction, and independent archive verification.
+- Corrected branch-head run
+  [`30499908270`](https://github.com/LeopardRich/codex-notifier/actions/runs/30499908270)
+  passed on commit `1bbbb27`: all normal Windows, macOS 14, current macOS, and
+  Linux relay gates; supply-chain audit/SBOM/notices; all four package jobs;
+  Windows, macOS, and Linux x86-64 install/reinstall/status/uninstall
+  lifecycles; Linux AArch64 architecture verification; and the aggregate
+  checksum release bundle were green.
+- The tag-only attestation/publication job was skipped as designed on the
+  branch push. No signing or notarization identity was available or inferred.
+
 ## Explicit release limits
 
 - No production Windows signing certificate, Apple Developer ID, or Apple
@@ -71,11 +92,15 @@ dependency audit, package lifecycle, and first-release upgrade handling.
 - Signing-identity selection, protected environment bindings, and a real
   signed/notarized tag run remain Stage 20 release-candidate gates.
 
-## Pending merge gates
+## Completion decision
 
-- Green branch CI for supply-chain audit, all four verification packages,
-  package lifecycle, aggregate bundle, normal platform tests, OpenSSH, and
-  headless native diagnostics.
-- Fast-forward merge followed by green permanent `main` CI.
+- The implemented verification artifacts, blocking CI, lifecycle coverage,
+  documented first-release upgrade exception, and fail-closed protected
+  release path satisfy the Stage 19 implementation scope.
+- Stage 19 is permanently closed only after this evidence commit is green on
+  the implementation branch, fast-forwarded to `main`, and permanent `main` CI
+  is green.
 
-Stage 20 must not begin until these gates finish.
+Stage 20 must not begin before that gate. A formal tag remains prohibited until
+the production signing, notarization, protected-environment, and candidate
+audit gates recorded above are actually satisfied.
