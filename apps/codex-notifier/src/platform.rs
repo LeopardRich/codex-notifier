@@ -4,6 +4,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 #[cfg(any(windows, target_os = "macos"))]
 use std::process::{Command, Stdio};
+#[cfg(windows)]
+use std::time::{Duration, Instant};
 
 use codex_notifier_config::ConfigPaths;
 use thiserror::Error;
@@ -20,6 +22,10 @@ const MACOS_LABEL: &str = "io.github.leopardrich.codex-notifier";
 const WINDOWS_APP_ID: &str = "LeopardRich.CodexNotifier";
 #[cfg(windows)]
 const WINDOWS_RUN_VALUE: &str = "CodexNotifier";
+#[cfg(windows)]
+const WINDOWS_REMOVE_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(windows)]
+const WINDOWS_REMOVE_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Exact platform paths used by installation and startup.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -379,10 +385,30 @@ fn remove_tree(path: &Path) -> Result<(), PlatformError> {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
             Err(PlatformError::OwnershipConflict)
         }
-        Ok(_) => fs::remove_dir_all(path).map_err(|_| PlatformError::FileSystem),
+        Ok(_) => remove_directory(path),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(_) => Err(PlatformError::FileSystem),
     }
+}
+
+#[cfg(windows)]
+fn remove_directory(path: &Path) -> Result<(), PlatformError> {
+    let deadline = Instant::now() + WINDOWS_REMOVE_RETRY_TIMEOUT;
+    loop {
+        match fs::remove_dir_all(path) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(_) if Instant::now() < deadline => {
+                std::thread::sleep(WINDOWS_REMOVE_RETRY_INTERVAL);
+            }
+            Err(_) => return Err(PlatformError::FileSystem),
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn remove_directory(path: &Path) -> Result<(), PlatformError> {
+    fs::remove_dir_all(path).map_err(|_| PlatformError::FileSystem)
 }
 
 #[cfg(any(windows, target_os = "macos"))]
@@ -844,6 +870,11 @@ fn deactivate_resources(_paths: &PlatformPaths) -> Result<(), PlatformError> {
 #[cfg(all(test, windows))]
 mod windows_tests {
     use super::*;
+    use std::fs::OpenOptions;
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use std::thread;
+
+    use tempfile::TempDir;
 
     #[test]
     fn generated_icon_has_one_bounded_32_bit_image() {
@@ -864,6 +895,30 @@ mod windows_tests {
                 .chunks_exact(4)
                 .any(|pixel| pixel[3] == 255)
         );
+    }
+
+    #[test]
+    fn installed_tree_removal_waits_for_a_transient_windows_file_lock() {
+        const FILE_SHARE_READ: u32 = 0x0000_0001;
+
+        let directory = TempDir::new().expect("temporary directory");
+        let root = directory.path().join("installed");
+        fs::create_dir(&root).expect("install root");
+        let executable = root.join("codex-notifier.exe");
+        fs::write(&executable, b"test executable").expect("installed executable");
+        let locked = OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(&executable)
+            .expect("exclusive-delete file handle");
+        let release = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(150));
+            drop(locked);
+        });
+
+        remove_tree(&root).expect("bounded retry removes the unlocked tree");
+        release.join().expect("lock-release thread");
+        assert!(!root.exists());
     }
 }
 
