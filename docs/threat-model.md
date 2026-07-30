@@ -1,9 +1,9 @@
 # Threat Model
 
 - Status: Accepted for protocol version 1
-- Review date: 2026-07-29
+- Review date: 2026-07-30
 - Owners: Project maintainers
-- Related decisions: ADR-0001 through ADR-0006
+- Related decisions: ADR-0001 through ADR-0007
 
 ## Scope and invariants
 
@@ -237,3 +237,26 @@ notification action, reverse tunnel, network listener, hosted service, mobile
 client, storage encryption, privileged installer, or new release channel.
 Also review after a security incident, signing-key rotation, or change to the
 minimum supported Codex/OS versions.
+
+## Stage 20 rereview
+
+The 2026-07-30 release audit found no new protocol, event, transport, native
+API, privilege, or data-retention boundary. The seven invariants and existing
+residual risks therefore remain valid. Stage 19 adds a fixed-input packaging
+boundary, checksum/SBOM/license verification, protected signing/notarization
+branches, and state-preserving package lifecycle tests without adding a
+network service or privileged installer.
+
+Gitleaks 8.30.1 scanned all 129 commits at the audit baseline with its release
+archive verified against the publisher's SHA-256 list; no secret was found.
+The same checksum-pinned full-history scan is a permanent supply-chain CI gate.
+No private-key, certificate, credential, database, or built release archive is
+tracked. Machine-specific proxy instructions remain development-only and do
+not enter application defaults or fixed package inputs.
+
+Production Windows and Apple identities, notarization credentials, and the
+protected `release` GitHub Environment are absent. Consequently the production
+trust branch itself has not run, and the current unsigned/ad-hoc artifacts are
+not release candidates. Real remote-to-Windows and remote-to-macOS continuous
+native runs are also absent. These are blocking evidence gaps, not accepted
+residual risks; the Stage 20 audit must return no-go until they are closed.

@@ -19,6 +19,8 @@ behavior remains documented in both root README files.
   and four-path platform evidence contract.
 - [`release.md`](release.md): archives, protected signing/notarization,
   checksums, SBOM/licenses, verification, and package lifecycle.
+- [`release-checklist.md`](release-checklist.md): release-candidate decision,
+  platform reruns, reproducible evidence, rollback, and withdrawal procedure.
 - [`decisions/`](decisions/): accepted architecture decisions.
 - [`verification/`](verification/): stage evidence and explicitly unverified
   platform checks.

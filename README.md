@@ -6,7 +6,7 @@
 It turns Codex events that need human attention into native Windows or macOS
 notifications, including events produced by Codex running on a remote server.
 
-> Status: Stages 01-19 are implemented and platform-verified where the required environment is available: compatibility evidence, architecture
+> Status: Stages 01-20 are implemented or audited and platform-verified where the required environment is available: compatibility evidence, architecture
 > decisions, the Rust workspace, three-platform quality gates, and the
 > canonical event domain model, layered configuration, and cross-platform path
 > rules are established, together with structured redacted logging and the
@@ -49,6 +49,10 @@ notifications, including events produced by Codex running on a remote server.
 > verification packages and the aggregate bundle are green. Production Windows
 > signing, Apple Developer ID/notarization, and a protected tag run remain
 > unverified, so these unsigned/ad-hoc artifacts are not release candidates.
+> Stage 20 completed the evidence-chain, compatibility, threat, secret/config,
+> documentation, and rollback audit with a **no-go** result. The protected
+> `release` environment does not exist and neither continuous remote desktop
+> path can be rerun on a signed candidate, so no formal tag or release exists.
 
 The implementation sequence and acceptance gates are defined in
 [`stages.md`](stages.md).
@@ -497,6 +501,31 @@ diagnostics are implemented:
 | `doctor` | Implemented for desktop and relay | Read-only configuration, Codex, agent, IPC, storage, notification, OpenSSH, and target checks. |
 | `test` | Implemented for desktop and relay | Submit either explicit synthetic event and wait for its local or remote desktop delivery receipt. |
 | `status` | Implemented for desktop and relay | Show role, installation, agent, queue age/counts, delivery time, storage, and native status without event content. |
+
+### Package verification and setup
+
+There is no formal `v0.1.0` release. Current CI archives are unsigned/ad-hoc
+engineering artifacts and must not be installed as trusted release candidates.
+The eventual candidate must first pass checksums, the matching platform
+verifier, production desktop trust, and every item in
+[`docs/release-checklist.md`](docs/release-checklist.md).
+
+After those gates report go, extract the matching verified archive and use its
+own executable or scripts:
+
+| Target | Install and check | Remove |
+| --- | --- | --- |
+| Windows x86-64 | `codex-notifier.exe install --codex-version 0.144.5`, then `codex-notifier.exe doctor` and `codex-notifier.exe status` | Run `codex-notifier.exe uninstall` from the external extracted archive, not the installed copy. |
+| macOS 14+ | Run `Codex Notifier.app/Contents/MacOS/codex-notifier install --codex-version 0.144.5`, then `doctor` and `status` through the same executable | Run `uninstall` through the verified external app executable. |
+| Linux relay | Run `./install.sh`, create the relay configuration/SSH host block, then run the installed `codex-notifier doctor` | Run `./uninstall.sh`; configuration and SQLite state remain. |
+
+Verify `SHA256SUMS` before extraction and follow the signature/notarization and
+per-archive commands in [`docs/release.md`](docs/release.md). Configuration
+paths and keys are defined above; remote setup is in
+[`docs/restricted-ssh.md`](docs/restricted-ssh.md) and
+[`docs/relay-ssh.md`](docs/relay-ssh.md); diagnostics are in
+[`docs/diagnostics.md`](docs/diagnostics.md). Uninstall removes owned resources
+but deliberately preserves durable event state.
 
 ### Local desktop lifecycle
 

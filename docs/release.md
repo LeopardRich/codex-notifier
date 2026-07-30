@@ -119,3 +119,9 @@ Do not create a formal version tag when desktop production signing,
 notarization, protected-environment review, or any package/lifecycle gate is
 unverified. Ad-hoc or unsigned artifacts can support engineering verification
 only; renaming them does not make them release candidates.
+
+The complete go/no-go checklist, required four-path candidate reruns, evidence
+record, rollback, and withdrawal procedure are in
+[`release-checklist.md`](release-checklist.md). A failed audit must remain a
+documented no-go; it must not be bypassed by editing artifact names or release
+notes.

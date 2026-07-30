@@ -6,7 +6,7 @@
 Codex 事件转换为 Windows 或 macOS 原生系统通知，并支持 Codex 运行在远程
 服务器上的场景。
 
-> 当前状态：阶段 01-19 已实现，并在具备所需环境的平台上通过验证；兼容性证据、架构决策、Rust workspace、三平台
+> 当前状态：阶段 01-20 已实现或完成审计，并在具备所需环境的平台上通过验证；兼容性证据、架构决策、Rust workspace、三平台
 > 质量门禁、规范事件领域模型、分层配置、跨平台路径规则与结构化脱敏日志模型均已
 > 建立，事务性 SQLite 发件箱/去重存储、有界的用户级本地 IPC、角色感知 agent
 > 生命周期、持久背压和有界 worker 排空也已完成；Codex CLI 0.144.5 的 CLI
@@ -33,6 +33,9 @@ Codex 事件转换为 Windows 或 macOS 原生系统通知，并支持 Codex 运
 > 校验和、SPDX 与许可证材料、package 生命周期门禁，以及默认关闭的受保护签名、公证与
 > 发布任务。所有分支验证 package 和聚合归档均已通过。生产 Windows 签名、Apple
 > Developer ID/公证与受保护 tag 运行仍未验证，因此这些未签名或 ad-hoc 产物不是发布候选。
+> 阶段 20 已完成证据链、兼容性、威胁、secret/配置、文档与回滚审计，结论为
+> **no-go**。受保护的 `release` environment 尚不存在，两条连续远程桌面路径也无法在
+> 已签名候选上重跑，因此没有创建正式 tag 或 release。
 
 实施顺序与各阶段验收门槛见 [`stages.md`](stages.md)。
 
@@ -415,6 +418,26 @@ Windows 上的用户配置与状态遵循 `%APPDATA%` 和 `%LOCALAPPDATA%`，mac
 | `doctor` | 桌面端与中继端已实现 | 只读检查配置、Codex、agent、IPC、存储、通知、OpenSSH 与目标连通性。 |
 | `test` | 桌面端与中继端已实现 | 提交任一显式模拟事件，并等待本地或远程桌面投递回执。 |
 | `status` | 桌面端与中继端已实现 | 显示角色、安装、agent、队列年龄/计数、最近投递、存储与原生状态，不展示事件正文。 |
+
+### Package 校验与设置
+
+目前没有正式 `v0.1.0` release。现有 CI 归档是未签名或 ad-hoc 的工程验证产物，
+不能作为可信发布候选安装。未来候选必须先通过校验和、对应平台 verifier、生产桌面
+信任，以及 [`docs/release-checklist.md`](docs/release-checklist.md) 的每项门禁。
+
+所有门禁给出 go 结论后，解压对应的已验证归档，并使用其中的可执行文件或脚本：
+
+| 目标 | 安装与检查 | 移除 |
+| --- | --- | --- |
+| Windows x86-64 | 运行 `codex-notifier.exe install --codex-version 0.144.5`，再运行 `codex-notifier.exe doctor` 和 `codex-notifier.exe status` | 从外部解压归档而不是已安装副本运行 `codex-notifier.exe uninstall`。 |
+| macOS 14+ | 通过 `Codex Notifier.app/Contents/MacOS/codex-notifier install --codex-version 0.144.5` 安装，再通过同一可执行文件运行 `doctor` 与 `status` | 通过外部已验证 app 中的可执行文件运行 `uninstall`。 |
+| Linux relay | 运行 `./install.sh`，创建 relay 配置/SSH Host block，再运行已安装的 `codex-notifier doctor` | 运行 `./uninstall.sh`；配置与 SQLite 状态会保留。 |
+
+解压前先验证 `SHA256SUMS`，并按 [`docs/release.md`](docs/release.md) 执行签名、
+公证与逐归档命令。配置路径和键见上文；远程设置见
+[`docs/restricted-ssh.md`](docs/restricted-ssh.md) 与
+[`docs/relay-ssh.md`](docs/relay-ssh.md)；诊断见
+[`docs/diagnostics.md`](docs/diagnostics.md)。卸载只移除自有资源，并有意保留持久事件状态。
 
 ### 本地桌面端生命周期
 

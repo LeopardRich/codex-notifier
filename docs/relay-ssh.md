@@ -3,7 +3,9 @@
 Stage 16 implements source-built relay delivery through the operating system's
 OpenSSH client. It does not install OpenSSH, create keys, edit SSH files, open a
 firewall, add a reverse tunnel, or create a Linux desktop notification path.
-Release archives and a managed systemd user service remain Stage 19 work.
+Stage 19 provides verified x86-64/AArch64 relay archives and a managed systemd
+user service; production release provenance remains blocked by the Stage 20
+go/no-go checklist.
 
 ## 1. Prepare the desktop trust boundary
 

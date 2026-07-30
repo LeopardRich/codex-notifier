@@ -1,9 +1,8 @@
 # Compatibility Matrix
 
-Status: Stages 10-11 implement task-completion and approval-request ingestion
-for the initial Codex CLI 0.144.5 target verified on Windows. Support is
-interface-specific; no macOS Codex fixture result or broader version range may
-be inferred from this file.
+Status: Stage 20 rereviewed the initial Codex CLI 0.144.5 and platform/package
+matrix. Event support remains interface-specific; no macOS Codex fixture result
+or broader version range may be inferred from this file.
 
 ## Target matrix
 
@@ -92,3 +91,18 @@ hook reports approval notifications as unavailable and installs no approval
 hook until a real `PermissionRequest` fixture is verified; app-server support
 is never treated as CLI-hook support. Unsupported paths do not read Codex
 session transcripts or scrape terminal output as a fallback.
+
+## Platform and package matrix
+
+| Target | Intended role | Verified platform evidence | Versioned artifact | Release-candidate state |
+| --- | --- | --- | --- | --- |
+| Windows 10 22H2+ x86-64 desktop | Local native notifications and remote receiver | Local source-to-WinRT path and both event kinds verified; Windows OpenSSH-to-native path unverified | `codex-notifier-v0.1.0-windows-x86_64.zip` passed unsigned verification lifecycle | Blocked on production Authenticode identity and protected tag run |
+| macOS 14+ Intel/Apple-silicon desktop | Local native notifications and remote receiver | Local native evidence on macOS 14 and current macOS; OpenSSH-to-native path unverified | `codex-notifier-v0.1.0-macos-universal.zip` passed ad-hoc verification lifecycle | Blocked on Developer ID, notarization, and protected tag run |
+| Linux x86-64 relay | Remote Codex relay only | Real loopback system OpenSSH boundary, retry, and deduplication verified | `codex-notifier-v0.1.0-linux-x86_64.tar.gz` passed install/uninstall lifecycle | Requires checksums and release provenance from the eventual protected tag |
+| Linux AArch64 relay | Remote Codex relay only | Cross-compiled architecture and shared relay contracts verified; native AArch64 execution unverified | `codex-notifier-v0.1.0-linux-aarch64.tar.gz` passed architecture verification | Requires checksums and release provenance from the eventual protected tag |
+
+Linux has no native notification adapter. Component-level Linux OpenSSH and
+separate desktop-native evidence do not establish either remote desktop row.
+Windows Server is unsupported, the ordinary CLI approval hook remains
+unverified, and version `0.1.0` has no previous stable package for a literal
+upgrade. These limits must remain visible in release notes and diagnostics.
