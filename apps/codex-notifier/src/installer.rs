@@ -475,11 +475,19 @@ fn hook_commands(
     ];
     #[cfg(windows)]
     {
-        let command = arguments
+        let invocation = arguments
             .iter()
-            .map(|value| windows_quote(value))
+            .map(|value| powershell_quote(value))
             .collect::<Result<Vec<_>, _>>()?
             .join(" ");
+        // Codex 0.144.5 cannot launch a command whose first Windows token is a
+        // quoted path. A fixed system executable keeps the first token
+        // unquoted while PowerShell safely invokes the installed path.
+        let command = format!(
+            "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \
+             \"$OutputEncoding=[Text.UTF8Encoding]::new($false); \
+             [Console]::In.ReadToEnd() | & {invocation}; exit $LASTEXITCODE\""
+        );
         Ok((command.clone(), Some(command)))
     }
     #[cfg(not(windows))]
@@ -521,7 +529,7 @@ fn relay_hook_layout(
 }
 
 #[cfg(windows)]
-fn windows_quote(value: &str) -> Result<String, InstallerError> {
+fn powershell_quote(value: &str) -> Result<String, InstallerError> {
     if value.is_empty()
         || value.chars().any(char::is_control)
         || value
@@ -530,7 +538,7 @@ fn windows_quote(value: &str) -> Result<String, InstallerError> {
     {
         return Err(InstallerError::UnsafeHookCommand);
     }
-    Ok(format!("\"{value}\""))
+    Ok(format!("'{}'", value.replace('\'', "''")))
 }
 
 #[cfg(not(windows))]
@@ -643,7 +651,11 @@ mod tests {
         #[cfg(not(windows))]
         assert!(windows.is_none());
         #[cfg(windows)]
-        assert!(windows.is_some());
+        {
+            assert!(command.starts_with("powershell.exe "));
+            assert!(command.contains("[Console]::In.ReadToEnd()"));
+            assert_eq!(windows.as_deref(), Some(command.as_str()));
+        }
     }
 
     #[test]
@@ -682,9 +694,13 @@ mod tests {
     fn windows_hook_rejects_expansion_and_command_metacharacters() {
         for value in ["C:\\Users\\%NAME%", "C:\\bad&path", "C:\\bad!path"] {
             assert!(matches!(
-                windows_quote(value),
+                powershell_quote(value),
                 Err(InstallerError::UnsafeHookCommand)
             ));
         }
+        assert_eq!(
+            powershell_quote("C:\\Users\\O'Brien\\notifier.exe").expect("quoted path"),
+            "'C:\\Users\\O''Brien\\notifier.exe'"
+        );
     }
 }

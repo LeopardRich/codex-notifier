@@ -145,6 +145,12 @@ fn relay_hook_install_is_idempotent_and_uninstall_preserves_user_files() {
     assert!(owned_command.contains("--host-label"));
     assert!(owned_command.contains("remote"));
     assert!(!owned_command.contains("existing-user-hook"));
+    #[cfg(windows)]
+    assert!(
+        groups[1]["hooks"][0]["commandWindows"]
+            .as_str()
+            .is_some_and(|command| command.starts_with("powershell.exe "))
+    );
 
     let second = environment.run(&["hook", "install", "--codex-version", "0.144.5"]);
     assert!(second.status.success());
