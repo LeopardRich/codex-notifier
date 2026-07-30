@@ -54,6 +54,11 @@ Only proceed when `status` reports `agent_running=true` and
 Windows may show an unsigned-app or SmartScreen warning. Bypass it only for the
 archive whose SHA-256 was verified above.
 
+The self-tests do not grant Codex hook trust. Open an interactive Codex
+session, run `/hooks`, inspect the exact installed executable and fixed
+arguments in the new `Stop` handler, then trust that definition. Do not make
+`--dangerously-bypass-hook-trust` part of normal startup.
+
 ## 3. Install the macOS desktop
 
 Copy the macOS archive to the Mac, verify it, then extract it with `ditto`:
@@ -86,7 +91,8 @@ bin="Codex Notifier.app/Contents/MacOS/codex-notifier"
 
 Grant notifications when macOS prompts. Require a running agent,
 `notification="ready"`, and two delivered self-tests before configuring remote
-delivery.
+delivery. In an interactive Codex session, run `/hooks`, inspect the installed
+app executable and fixed arguments, and trust the exact new `Stop` handler.
 
 ## 4. Prepare one desktop as the SSH receiver
 
@@ -148,11 +154,13 @@ codex-notifier doctor ssh
 codex-notifier status --format json
 ```
 
-Review the new `Stop` hook in Codex when requested. `install.sh` refuses to
-enable the service or install the hook when the relay configuration is absent.
-It preserves existing configuration and unrelated hook groups. Require
-`status` to report `role="relay"`, `installed=true`, and
-`agent_running=true` before continuing.
+Open an interactive Codex session on Ubuntu, run `/hooks`, inspect the
+installed executable and fixed arguments, and trust the exact new `Stop`
+handler. Codex skips an untrusted user hook. `install.sh` refuses to enable the
+service or install the hook when the relay configuration is absent and
+preserves existing configuration and unrelated hook groups. Require `status`
+to report `role="relay"`, `installed=true`, and `agent_running=true` before
+continuing.
 
 If the server does not keep user services alive after logout, enable lingering
 deliberately and review that persistent-login change:

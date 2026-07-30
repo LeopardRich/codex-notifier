@@ -50,6 +50,10 @@ Windows 使用 PowerShell 计算所选归档的哈希，并与 `SHA256SUMS` 对�
 `test` 都报告 `delivery="delivered"` 时才继续。Windows 可能显示未签名应用或
 SmartScreen 警告；只对上一步已核对 SHA-256 的归档绕过警告。
 
+这些自测不会授予 Codex hook 信任。打开一个交互式 Codex 会话，运行 `/hooks`，
+检查新 `Stop` handler 中精确的已安装可执行文件和固定参数，然后信任该定义。
+不要把 `--dangerously-bypass-hook-trust` 写入日常启动方式。
+
 ## 3. 安装 macOS 桌面端
 
 把 macOS 归档复制到 Mac，校验后用 `ditto` 解压并检查 bundle 签名结构：
@@ -80,7 +84,8 @@ bin="Codex Notifier.app/Contents/MacOS/codex-notifier"
 ```
 
 在 macOS 提示时允许通知。确认 agent 正在运行、`notification="ready"`，且两个
-自测均已投递后，再配置远程路径。
+自测均已投递后，再配置远程路径。在交互式 Codex 会话中运行 `/hooks`，检查已安装
+app 可执行文件和固定参数，并信任精确的新 `Stop` handler。
 
 ## 4. 选择一个桌面作为 SSH 接收端
 
@@ -138,9 +143,11 @@ codex-notifier doctor ssh
 codex-notifier status --format json
 ```
 
-Codex 请求时，审阅新增的 `Stop` hook。配置不存在时，`install.sh` 会拒绝启用
-服务或安装 hook；已有配置和无关 hook 会被保留。继续之前，确认 `status` 报告
-`role="relay"`、`installed=true` 与 `agent_running=true`。
+在 Ubuntu 打开一个交互式 Codex 会话，运行 `/hooks`，检查已安装可执行文件和
+固定参数，并信任精确的新 `Stop` handler；Codex 会跳过未信任的用户 hook。配置
+不存在时，`install.sh` 会拒绝启用服务或安装 hook；已有配置和无关 hook 会被
+保留。继续之前，确认 `status` 报告 `role="relay"`、`installed=true` 与
+`agent_running=true`。
 
 如果退出 SSH 登录后 systemd 用户服务不会继续运行，可在明确接受常驻用户服务后
 启用 lingering：
