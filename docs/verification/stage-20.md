@@ -92,7 +92,7 @@ paths remain outside verified claims.
 ## Local audit implementation checks
 
 - Rust 1.88 GNU formatting and strict all-target/all-feature Clippy passed.
-- All 143 normal workspace tests passed. Four interactive Windows native-state
+- All 144 normal workspace tests passed. Four interactive Windows native-state
   tests remained intentionally ignored and retain their documented manual
   requirements.
 - `cargo deny check advisories licenses bans sources` passed. The same three
@@ -100,6 +100,30 @@ paths remain outside verified claims.
 - Actionlint 1.7.7, `git diff --check`, the exact staged-patch Gitleaks scan,
   and a repository-wide relative Markdown link audit passed.
 - `Cargo.lock` did not change during the audit.
+
+## Branch CI
+
+- Initial audit run
+  [`30501960312`](https://github.com/LeopardRich/codex-notifier/actions/runs/30501960312)
+  passed the normal four-platform matrix, checksum-pinned full-history Gitleaks
+  scan, dependency/SBOM/license gates, both Linux packages, and the macOS
+  universal package on commit `e4b7338`. Windows package construction and
+  verification also passed, but its lifecycle exposed a real shutdown race:
+  install and idempotent reinstall succeeded, then uninstall observed the
+  removed agent status record before the Windows process released its installed
+  executable and returned `install_platform_filesystem_failed`. The aggregate
+  bundle correctly remained blocked.
+- Commit `a45b388` adds a bounded Windows-only removal retry after ownership and
+  symlink validation. A deterministic exclusive-delete handle test releases the
+  lock after 150 ms and proves removal waits and completes; permanent locks
+  still fail after the five-second bound.
+- Corrected run
+  [`30502436974`](https://github.com/LeopardRich/codex-notifier/actions/runs/30502436974)
+  passed every job on commit `a45b388`, including the rebuilt Windows archive's
+  install/reinstall/status/uninstall/root-removal lifecycle, the macOS and Linux
+  lifecycles, all four packages, full-history secret scan, and aggregate
+  checksum bundle. Tag-only attestation/publication remained skipped as
+  designed.
 
 ## Candidate rerun matrix
 
