@@ -23,19 +23,24 @@ Codex 事件转换为 Windows 或 macOS 原生系统通知，并支持 Codex 运
 > 会话与拒绝矩阵已在 Linux loopback 测试架构中验证。持久中继角色现会以固定参数
 > 调用系统 OpenSSH、校验有界确认、分类传输/信任故障，并通过带抖动的指数退避和
 > 有界死信完成重试。同一 Linux 测试架构已验证离线排队、自动恢复、至少一次重发与
-> 桌面端去重。Windows/macOS SSH 服务端配置仍明确标记为未验证。阶段 17 的只读
+> 桌面端去重。可回滚的连续工程验证现已进一步覆盖 Windows 10 22H2 与 macOS 14 上
+> 从受限系统 OpenSSH 到原生通知的完整路径：两类合成事件和两份脱敏 Codex fixture
+> 均经过 relay IPC/SQLite、SSH、forced receive、桌面 IPC/SQLite 与目标原生 API；
+> Windows 运行还覆盖离线恢复和 100 次稳定 ID 重试。这些运行使用当前优化源码构建与
+> 未签名或临时非生产信任，并非发布候选。阶段 17 的只读
 > doctor、角色感知 status、人类/JSON 一致输出、稳定健康退出码，以及感知投递结果的
 > 本地/远程自测均已通过 Windows、macOS 14、当前 macOS 与 Linux relay 门禁。阶段 18
 > 进一步加入三个崩溃窗口的恢复、100 次重试去重、队列/版本/离线故障覆盖、保守的性能与
-> 资源预算，以及四条路径的可靠性矩阵。真实的远程到 Windows 和远程到 macOS 连续原生
-> 路径仍明确标记为未验证；Linux loopback 证据不作为任何桌面平台的验证结果。阶段 19
+> 资源预算，以及四条路径的可靠性矩阵。四条工程路径现均已有真实平台的连续证据；
+> Linux loopback 证据没有被用来推断任何桌面平台结论。阶段 19
 > 新增带版本的 Windows x86-64、macOS universal 与 Linux x86-64/AArch64 验证归档、
 > 校验和、SPDX 与许可证材料、package 生命周期门禁，以及默认关闭的受保护签名、公证与
 > 发布任务。所有分支验证 package 和聚合归档均已通过。生产 Windows 签名、Apple
 > Developer ID/公证与受保护 tag 运行仍未验证，因此这些未签名或 ad-hoc 产物不是发布候选。
 > 阶段 20 已完成证据链、兼容性、威胁、secret/配置、文档与回滚审计，结论为
-> **no-go**。受保护的 `release` environment 尚不存在，两条连续远程桌面路径也无法在
-> 已签名候选上重跑，因此没有创建正式 tag 或 release。
+> **no-go**。受保护的 `release` environment 与生产桌面签名身份尚不存在，因此四条
+> 路径（包括现已证明的远程路径）仍无法在签名并公证的候选产物上重跑；没有创建正式
+> tag 或 release。
 
 实施顺序与各阶段验收门槛见 [`stages.md`](stages.md)。
 

@@ -86,8 +86,9 @@ withdrawal.
 [`../compatibility.md`](../compatibility.md) now separates Codex interface,
 desktop OS, relay architecture, artifact, and remote-path evidence. Linux
 remains relay-only. Windows Server, ordinary CLI approval, macOS Codex fixture
-capture, native AArch64 relay execution, and both continuous remote desktop
-paths remain outside verified claims.
+capture, and native AArch64 relay execution remain outside verified claims.
+Both continuous remote desktop paths now have optimized source-build evidence;
+neither has production-signed candidate evidence.
 
 ## Local audit implementation checks
 
@@ -124,6 +125,18 @@ paths remain outside verified claims.
   lifecycles, all four packages, full-history secret scan, and aggregate
   checksum bundle. Tag-only attestation/publication remained skipped as
   designed.
+- A supplemental Windows 10 Session 8 run then exercised the optimized branch
+  executable through a temporary restricted Win32-OpenSSH 10.0p2 server to the
+  installed WinRT adapter. Both synthetic kinds and sanitized fixtures passed,
+  offline recovery succeeded, 100 stable-ID retries remained duplicates, and
+  all temporary install/SSH resources were removed.
+- Supplemental macOS run
+  [`30505508865`](https://github.com/LeopardRich/codex-notifier/actions/runs/30505508865)
+  passed local native evidence plus the continuous restricted
+  OpenSSH-to-UserNotifications path on commit `421c1ab`; normal CI run
+  [`30505508875`](https://github.com/LeopardRich/codex-notifier/actions/runs/30505508875)
+  passed all permanent platform and package jobs. The app used a temporary
+  non-production trusted identity and was not notarized.
 
 ## Candidate rerun matrix
 
@@ -131,8 +144,8 @@ paths remain outside verified claims.
 | --- | --- | --- |
 | Windows local and complete uninstall | Unsigned archive lifecycle passed; earlier real source-to-WinRT path passed | Insufficient: no Authenticode candidate run |
 | macOS local and complete uninstall | Ad-hoc universal archive lifecycle passed; earlier real native paths passed | Insufficient: no Developer ID/notarized candidate run |
-| Remote to Windows native | Linux real-OpenSSH component path and Windows local native path passed separately | Unverified: no continuous candidate run |
-| Remote to macOS native | Linux real-OpenSSH component path and macOS local native path passed separately | Unverified: no continuous candidate run |
+| Remote to Windows native | Continuous optimized source build passed both event kinds, both fixtures, offline recovery, deduplication, and cleanup through restricted OpenSSH and WinRT | Insufficient: no Authenticode candidate run |
+| Remote to macOS native | Continuous optimized source build passed both event kinds, both fixtures, install/uninstall, restricted OpenSSH, and UserNotifications in run `30505508865` | Insufficient: no Developer ID/notarized candidate run |
 
 The matrix deliberately does not combine component evidence into a platform
 claim. The complete operational rerun procedure is fixed in
@@ -148,9 +161,9 @@ claim. The complete operational rerun procedure is fixed in
 3. No Apple Developer ID Application certificate or notarization API binding
    is available, so notarization, stapling, and candidate Gatekeeper checks have
    never run.
-4. The four core candidate paths cannot be rerun: neither remote desktop path
-   has an available configured Windows/macOS OpenSSH destination, and no signed
-   desktop candidate exists.
+4. The four core paths have not been rerun with exact candidate artifacts. The
+   remote destination procedures are now exercised, but no production-signed
+   Windows or signed/notarized macOS candidate exists to use in those reruns.
 
 The audit itself is complete and its result is no-go. The implementation may
 merge after exact branch-head and permanent `main` CI are green, but Stage 20

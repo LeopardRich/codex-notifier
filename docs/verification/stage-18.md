@@ -62,8 +62,49 @@ performance/resource baselines.
   manifest, agent process, and exact managed hook. The pre-existing hooks
   document contains no notifier entry and the SQLite database remains. No
   verification-only identity or startup resource was left installed.
-- The Windows OpenSSH server capability is absent and installation requires
-  elevation. Remote-to-Windows therefore remains explicitly unverified.
+- The original Stage 18 pass found no installed Windows OpenSSH server and did
+  not elevate to add one. The later supplemental run below used a verified
+  portable OpenSSH distribution without installing a service or changing that
+  historical result.
+
+## Supplemental remote platform closure
+
+- Remote-to-Windows was exercised on the same Windows 10 Pro 22H2 interactive
+  Session 8 with the current optimized executable and a reversible desktop
+  install. The official portable Win32-OpenSSH 10.0p2 Preview archive was
+  verified at SHA-256
+  `23f50f3458c4c5d0b12217c6a5ddfde0137210a30fa870e98b29827f7b43aba5`,
+  and a non-service `sshd` listened only on `127.0.0.1:42222`.
+- A dedicated `restrict` key, strict host-key checking, forced `receive`, and
+  PTY/command rejection were exercised. Both synthetic self-test kinds and
+  both sanitized Codex 0.144.5 fixtures continuously traversed relay
+  IPC/SQLite, system `ssh`, forced receive, desktop IPC/SQLite, and WinRT.
+  Relay receipts increased from two to four and desktop receipts from seven to
+  nine for the fixture pair, with zero pending rows or dead letters.
+- An event queued while `sshd` was offline delivered automatically after the
+  daemon restarted. One hundred retries of a stable delivered ID all returned
+  `duplicate`, and desktop receipts remained 11 to 11.
+- Cleanup stopped both agents and `sshd`, removed all installed product,
+  identity, startup, manifest, configuration, and temporary SSH resources, and
+  restored the original Codex hooks and SSH configuration byte-for-byte.
+  SQLite retained 11 receipts, zero pending rows, and zero dead letters.
+- Remote-to-macOS was exercised by the macOS 14 Aqua job in run
+  [`30505508865`](https://github.com/LeopardRich/codex-notifier/actions/runs/30505508865)
+  on commit `421c1ab`. The job built the current optimized executable, signed
+  its app with the existing temporary non-production trusted identity,
+  installed it with its real LaunchAgent, and started a restricted temporary
+  system `sshd` on `127.0.0.1:42223`.
+- Both remote synthetic self-tests returned `route=remote` and
+  `delivery=delivered`; both sanitized fixtures followed the same relay-to-
+  UserNotifications path. Relay and desktop databases each committed four
+  receipts with zero pending rows and zero dead letters, notification status
+  remained `ready`, and the captured desktop showed the native notification.
+  The relay stopped cooperatively, uninstall removed the app and LaunchAgent,
+  the original SSH configuration was restored, and SQLite state was retained.
+- These two runs close the missing continuous engineering paths. They do not
+  satisfy the Stage 20 candidate matrix: Windows was unsigned, macOS used a
+  temporary non-production identity rather than Apple Developer ID and was not
+  notarized, and neither run used the exact protected candidate archives.
 
 ## Platform matrix and limits
 
@@ -73,9 +114,10 @@ The normative evidence levels and four-path matrix are in
 - Windows local now has a continuous Stage 18 source-fixture-to-WinRT run.
   macOS local reliability is covered by permanent native platform automation
   plus its earlier interactive native records.
-- Real remote-to-Windows and remote-to-macOS continuous native paths remain
-  unverified. The Linux OpenSSH harness proves shared transport behavior but
-  does not manufacture destination-platform evidence.
+- Remote-to-Windows and remote-to-macOS now each have a continuous optimized
+  source-build run to the real destination native API. The Linux OpenSSH
+  harness remains shared transport evidence only and was not used to infer
+  either platform result. Production-signed candidate reruns remain pending.
 - The pre-acknowledgement crash window is at-least-once and may repeat a native
   notification. Exactly-once visible delivery is claimed only for retries made
   after the receipt committed.
@@ -108,15 +150,22 @@ The normative evidence levels and four-path matrix are in
   passed all four jobs on commit `39e93e5`, including the revised Windows load
   gate, Windows Session 0 diagnostic, both macOS no-Aqua diagnostics, and the
   real OpenSSH delivery/recovery matrix.
+- Supplemental native-session run
+  [`30505508865`](https://github.com/LeopardRich/codex-notifier/actions/runs/30505508865)
+  passed the macOS 14 local authorization/banner, Focus suppression, continuous
+  remote OpenSSH-to-UserNotifications, and reversible install/uninstall gates
+  on commit `421c1ab`. Matching normal CI run
+  [`30505508875`](https://github.com/LeopardRich/codex-notifier/actions/runs/30505508875)
+  passed every permanent platform and package job on the same commit.
 - The `actions/checkout@v4` Node.js 20 deprecation notice is a non-blocking
   upstream action warning; all project checks completed successfully.
 
 ## Completion decision
 
-- The available Windows and macOS local evidence, cross-platform reliability
-  contracts, and real Linux OpenSSH harness satisfy the Stage 18 implementation
-  scope without adding Linux desktop support or overstating unavailable remote
-  platform runs.
+- The Windows/macOS local and continuous remote-native evidence,
+  cross-platform reliability contracts, and real Linux OpenSSH harness satisfy
+  the Stage 18 implementation scope without adding Linux desktop support or
+  promoting engineering builds to release candidates.
 - Crash recovery prefers no loss in the pre-acknowledgement window, stable-ID
   retries after a committed receipt invoke the final adapter only once, and
   capacity, compatibility, latency, memory, storage, retry, and worker bounds

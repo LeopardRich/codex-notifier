@@ -19,9 +19,10 @@ decision.
 
 - The ordinary Codex CLI approval hook remains unavailable; approval requests
   use the verified app-server interface.
-- Real remote-to-Windows and remote-to-macOS continuous native paths remain
-  unverified as recorded in `docs/reliability.md`; both are current candidate
-  blockers.
+- Continuous remote-to-Windows and remote-to-macOS native paths are verified
+  with current optimized source builds as recorded in `docs/reliability.md`.
+  Neither has been rerun with its required production-signed/notarized
+  candidate, so both candidate rows remain blocked.
 - Linux is relay-only and has no desktop notification adapter.
 - Version 1 has explicit manual install/upgrade commands and no auto-updater.
 - The protected `release` GitHub Environment, production Windows signing, and

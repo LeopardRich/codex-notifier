@@ -22,12 +22,14 @@ notification implementation.
 | --- | --- | --- | --- |
 | Windows local | Both Codex 0.144.5 source fixtures run through child `emit`, real Windows named-pipe IPC, SQLite, and the recording notification port. | After the expected pre-install missing-identity result, a reversible Stage 18 install registered the AUMID and ran both source payloads through the installed agent to WinRT and durable receipts. Stage 12 and Stage 14 retain the earlier native records. | Local source-to-native path verified on Windows 10. |
 | macOS local | The same source/IPC/SQLite/recording contracts run in macOS 14 and current macOS CI. | Stage 13 and Stage 14 interactive Aqua runs accepted both UserNotifications event kinds and retained receipts. | Reliability path verified from permanent automation plus recorded interactive native evidence. |
-| Remote to Windows | The Linux harness proves relay SQLite, offline retry, system OpenSSH, forced receive, desktop IPC/SQLite, and both event kinds. | Windows local native delivery is verified separately. No real Windows OpenSSH server-to-native run has been executed. | End-to-end platform path unverified. |
-| Remote to macOS | The Linux harness proves the same platform-neutral remote chain and both event kinds. | macOS local native delivery is verified separately. No real macOS OpenSSH server-to-native run has been executed. | End-to-end platform path unverified. |
+| Remote to Windows | The Linux harness retains the platform-neutral contracts. | A reversible Windows 10 22H2 Session 8 run used system `ssh`, a temporary restricted Win32-OpenSSH 10.0p2 server, forced receive, the installed desktop agent, and WinRT. Both synthetic kinds and both sanitized Codex fixtures delivered; offline recovery succeeded and 100 stable-ID retries remained duplicates. | Continuous source-build engineering path verified; production-signed candidate rerun pending. |
+| Remote to macOS | The Linux harness retains the platform-neutral contracts. | macOS 14 run [`30505508865`](https://github.com/LeopardRich/codex-notifier/actions/runs/30505508865) installed a temporarily trusted app and Aqua LaunchAgent, then used system `ssh` plus a restricted temporary `sshd`. Both synthetic kinds and both sanitized fixtures reached UserNotifications; relay and desktop each committed four receipts with no pending or dead-letter rows. | Continuous source-build engineering path verified; Developer ID/notarized candidate rerun pending. |
 
-The remote rows must remain unverified until one continuous run reaches the
-real destination native API on that operating system. Linux loopback and local
-native evidence cannot be combined into a claim that such a run occurred.
+Both remote rows now have their own continuous destination-platform run; they
+were not inferred by combining Linux loopback with separate local-native
+evidence. They remain engineering evidence rather than release-candidate
+evidence because neither desktop artifact carried its required production
+identity, and the macOS artifact was not notarized.
 
 ## Recovery matrix
 

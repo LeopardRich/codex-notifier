@@ -257,6 +257,8 @@ not enter application defaults or fixed package inputs.
 Production Windows and Apple identities, notarization credentials, and the
 protected `release` GitHub Environment are absent. Consequently the production
 trust branch itself has not run, and the current unsigned/ad-hoc artifacts are
-not release candidates. Real remote-to-Windows and remote-to-macOS continuous
-native runs are also absent. These are blocking evidence gaps, not accepted
-residual risks; the Stage 20 audit must return no-go until they are closed.
+not release candidates. Continuous remote-to-Windows and remote-to-macOS native
+runs now exist for optimized source builds with temporary engineering trust,
+but neither has been rerun with a production-signed candidate. Production trust
+and candidate reruns remain blocking evidence gaps, not accepted residual
+risks; the Stage 20 audit must return no-go until they are closed.

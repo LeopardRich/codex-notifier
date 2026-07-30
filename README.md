@@ -33,16 +33,22 @@ notifications, including events produced by Codex running on a remote server.
 > fixed arguments, validates bounded acknowledgements, classifies transport and
 > trust failures, and schedules jittered exponential retries with bounded
 > dead letters. The same Linux harness verifies offline queueing, automatic
-> recovery, at-least-once resend, and desktop deduplication. Windows/macOS
-> SSH-server setup remains explicitly unverified. The Stage 17 read-only doctor,
+> recovery, at-least-once resend, and desktop deduplication. Reversible
+> continuous engineering runs now also verify restricted system
+> OpenSSH-to-native delivery on Windows 10 22H2 and macOS 14: both synthetic
+> event kinds and both sanitized Codex fixtures crossed relay IPC/SQLite, SSH,
+> forced receive, desktop IPC/SQLite, and the destination native API. The
+> Windows run additionally verified offline recovery and 100 stable-ID retries.
+> These runs used current optimized source builds with unsigned or temporary
+> non-production trust, not release candidates. The Stage 17 read-only doctor,
 > role-aware status, matching human/JSON output, stable health exit codes, and
 > delivery-aware local/remote self-tests pass the Windows, macOS 14, current
 > macOS, and Linux relay gates. Stage 18 adds explicit three-window crash
 > recovery, 100-retry duplicate suppression, queue/version/offline fault
 > coverage, conservative performance/resource budgets, and a four-path
-> reliability matrix. Real remote-to-Windows and remote-to-macOS continuous
-> native paths remain explicitly unverified; Linux loopback evidence is not
-> treated as either desktop-platform result. Stage 19 adds versioned Windows
+> reliability matrix. All four engineering paths now have continuous real
+> platform evidence; Linux loopback evidence was not used to infer either
+> desktop-platform result. Stage 19 adds versioned Windows
 > x86-64, macOS universal, and Linux x86-64/AArch64 verification archives,
 > checksums, SPDX and license materials, package lifecycle gates, and
 > fail-closed protected signing/notarization/publication jobs. All branch
@@ -51,8 +57,9 @@ notifications, including events produced by Codex running on a remote server.
 > unverified, so these unsigned/ad-hoc artifacts are not release candidates.
 > Stage 20 completed the evidence-chain, compatibility, threat, secret/config,
 > documentation, and rollback audit with a **no-go** result. The protected
-> `release` environment does not exist and neither continuous remote desktop
-> path can be rerun on a signed candidate, so no formal tag or release exists.
+> `release` environment and production desktop identities do not exist, so the
+> four paths, including the now-proven remote paths, cannot be rerun on signed
+> and notarized candidate artifacts. No formal tag or release exists.
 
 The implementation sequence and acceptance gates are defined in
 [`stages.md`](stages.md).
