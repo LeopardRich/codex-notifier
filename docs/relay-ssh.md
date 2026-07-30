@@ -57,6 +57,19 @@ block, as shown by
 
 ## 3. Run and submit
 
+Install the verified CLI task-completion hook after the relay configuration and
+installed executable are in their final locations:
+
+```text
+codex-notifier hook install --codex-version 0.144.5
+```
+
+The command structurally merges one owned `Stop` group into
+`~/.codex/hooks.json`, records a separate ownership manifest, and preserves the
+relay configuration and unrelated hooks. The packaged `install.sh` performs
+this step by default. The ordinary CLI `PermissionRequest` hook remains
+unverified and is not installed.
+
 Start the per-user relay process:
 
 ```text
@@ -140,11 +153,13 @@ discarded.
 To remove a relay relationship reversibly:
 
 1. Stop the relay agent.
-2. Remove only the dedicated relay host block if it is not shared.
-3. Remove only the verified host-key entry for that relationship.
-4. Remove the dedicated public-key line from the desktop authorized-key file.
-5. Delete the dedicated private/public relay key pair.
-6. Retain or deliberately remove the relay state directory according to the
+2. Run `codex-notifier hook uninstall`, or use the packaged `uninstall.sh`, to
+   remove only the owned Codex hook group.
+3. Remove only the dedicated relay host block if it is not shared.
+4. Remove only the verified host-key entry for that relationship.
+5. Remove the dedicated public-key line from the desktop authorized-key file.
+6. Delete the dedicated private/public relay key pair.
+7. Retain or deliberately remove the relay state directory according to the
    user's data-retention choice.
 
 The project does not own OpenSSH installation, VPN, firewall, or SSH-server

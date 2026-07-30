@@ -420,6 +420,7 @@ Windows 上的用户配置与状态遵循 `%APPDATA%` 和 `%LOCALAPPDATA%`，mac
 | `agent` | 桌面端与中继端已实现 | 运行已配置的用户级角色进程。 |
 | `receive` | 已实现 | 从受限 SSH 会话接收一个有界规范事件，并通过本地 IPC 转交。 |
 | `install` / `uninstall` | 桌面端已实现 | 可逆地管理已验证 Codex hook 与 Windows/macOS 用户级自启动产物。 |
+| `hook install` / `hook uninstall` | 中继端已实现 | 在不改写中继配置或无关 hook 的前提下，可逆地合并或移除已验证的任务完成 hook。 |
 | `doctor` | 桌面端与中继端已实现 | 只读检查配置、Codex、agent、IPC、存储、通知、OpenSSH 与目标连通性。 |
 | `test` | 桌面端与中继端已实现 | 提交任一显式模拟事件，并等待本地或远程桌面投递回执。 |
 | `status` | 桌面端与中继端已实现 | 显示角色、安装、agent、队列年龄/计数、最近投递、存储与原生状态，不展示事件正文。 |
@@ -429,6 +430,12 @@ Windows 上的用户配置与状态遵循 `%APPDATA%` 和 `%LOCALAPPDATA%`，mac
 目前没有正式 `v0.1.0` release。现有 CI 归档是未签名或 ad-hoc 的工程验证产物，
 不能作为可信发布候选安装。未来候选必须先通过校验和、对应平台 verifier、生产桌面
 信任，以及 [`docs/release-checklist.md`](docs/release-checklist.md) 的每项门禁。
+
+如果只在自己拥有并管理的设备上使用，可以在核对 `SHA256SUMS` 后使用最新绿色
+`main` 运行生成的验证 bundle，但必须把它视为不受信任的个人构建：Windows 可能
+显示未签名应用警告，macOS 也不会把 ad-hoc app 视为已公证软件。完整的个人取包、
+校验、安装、SSH 配对、自测与卸载步骤见
+[`docs/personal-deployment-zh.md`](docs/personal-deployment-zh.md)。
 
 所有门禁给出 go 结论后，解压对应的已验证归档，并使用其中的可执行文件或脚本：
 
@@ -502,8 +509,9 @@ UUIDv7 响应关联 ID。合法展示字段中的 Shell 元字符始终只是 JS
 
 ### 中继 SSH 投递
 
-阶段 16 增加基于源码运行的中继 agent 路径。中继配置使用固定的系统 OpenSSH
-主机别名和有界投递策略：
+阶段 16 增加基于源码运行的中继 agent 路径。Linux 包会在有效中继配置就绪后通过
+`hook install` 添加已验证的任务完成 hook，`hook uninstall` 只移除该自有 hook
+组。中继配置使用固定的系统 OpenSSH 主机别名和有界投递策略：
 
 ```toml
 config_version = 1

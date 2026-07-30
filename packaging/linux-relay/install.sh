@@ -2,17 +2,35 @@
 set -eu
 
 enable=true
-if [ "${1-}" = "--no-enable" ]; then
-    enable=false
-elif [ "$#" -ne 0 ]; then
-    echo "usage: install.sh [--no-enable]" >&2
-    exit 2
-fi
+hook=true
+codex_version=
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --no-enable) enable=false; shift ;;
+        --no-hook) hook=false; shift ;;
+        --codex-version)
+            [ "$#" -ge 2 ] || { echo "--codex-version requires a value" >&2; exit 2; }
+            codex_version=$2
+            shift 2
+            ;;
+        *)
+            echo "usage: install.sh [--no-enable] [--no-hook] [--codex-version VERSION]" >&2
+            exit 2
+            ;;
+    esac
+done
 
 archive_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 prefix=${CODEX_NOTIFIER_PREFIX:-"$HOME/.local"}
 config_home=${XDG_CONFIG_HOME:-"$HOME/.config"}
 state_home=${XDG_STATE_HOME:-"$HOME/.local/state"}
+config="$config_home/codex-notifier/config.toml"
+
+if { [ "$enable" = true ] || [ "$hook" = true ]; } && [ ! -f "$config" ]; then
+    echo "relay configuration is required at $config" >&2
+    echo "copy examples/config.toml.example, set ssh_host_alias, then retry" >&2
+    exit 2
+fi
 
 case "$prefix" in
     /*) ;;
@@ -32,6 +50,14 @@ install -m 0755 "$archive_dir/codex-notifier" "$binary"
 sed "s|@EXECUTABLE@|$binary|g" \
     "$archive_dir/systemd/codex-notifier.service.in" > "$unit"
 chmod 0644 "$unit"
+
+if [ "$hook" = true ]; then
+    if [ -n "$codex_version" ]; then
+        "$binary" hook install --codex-version "$codex_version"
+    else
+        "$binary" hook install
+    fi
+fi
 
 if [ "$enable" = true ]; then
     systemctl --user daemon-reload

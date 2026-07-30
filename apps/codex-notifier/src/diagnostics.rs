@@ -993,12 +993,16 @@ pub fn render_status_error(error: &InstallerError, format: OutputFormat) -> (Str
             exit::CONFIGURATION,
             "Repair or recreate the current-user configuration.",
         ),
+        InstallerError::RelayRoleRequired => (
+            exit::CONFIGURATION,
+            "Set the current-user agent role to relay before managing its Codex hook.",
+        ),
         InstallerError::Lifecycle(_)
         | InstallerError::NotInstalled
         | InstallerError::UnsupportedCodex
         | InstallerError::UnsafeHookCommand => (
             exit::CONFIGURATION,
-            "Repair or reinstall the current-user desktop application.",
+            "Repair or reinstall the current-user notifier resources.",
         ),
     };
     let output = StatusFailureOutput {

@@ -11,7 +11,9 @@ use codex_notifier::desktop::{
 use codex_notifier::diagnostics::{
     OutputFormat, doctor, render_status, render_status_error, run_test, wait_for_event_state,
 };
-use codex_notifier::installer::{InstallerError, install, status, uninstall};
+use codex_notifier::installer::{
+    InstallerError, install, install_relay_hook, status, uninstall, uninstall_relay_hook,
+};
 use codex_notifier::lifecycle::RemovalDisposition;
 use codex_notifier::{ApprovalRequestedEmitter, EmitError, TaskCompletedEmitter};
 use codex_notifier_codex_source::{
@@ -82,12 +84,18 @@ struct TestCommand {
     wait: Option<std::time::Duration>,
 }
 
+enum HookCommand {
+    Install { codex_version: Option<String> },
+    Uninstall,
+}
+
 enum Command {
     Version,
     Emit(EmitCommand),
     Doctor(DoctorCommand),
     Receive,
     Agent,
+    Hook(HookCommand),
     Install { codex_version: Option<String> },
     Uninstall,
     Status(OutputFormat),
@@ -169,6 +177,25 @@ async fn run() -> Result<i32, CommandError> {
         }
         Command::Agent => {
             run_agent().await.map_err(CommandError::Desktop)?;
+            Ok(0)
+        }
+        Command::Hook(HookCommand::Install { codex_version }) => {
+            let codex_version = codex_version.map_or_else(detect_codex_version, Ok)?;
+            let report = install_relay_hook(&codex_version).map_err(CommandError::Installer)?;
+            println!(
+                "hook_installed=true\nupgraded={}\nhook_trust={}\napproval_installation=report_unavailable\napproval_notice={}",
+                report.upgraded, report.hook_trust, report.approval_notice,
+            );
+            Ok(0)
+        }
+        Command::Hook(HookCommand::Uninstall) => {
+            let report = uninstall_relay_hook().map_err(CommandError::Installer)?;
+            println!(
+                "hook_installed=false\nhook_removed={}\nhook_preserved={}\nconfig_preserved={}",
+                report.hook == RemovalDisposition::Removed,
+                report.hook == RemovalDisposition::Preserved,
+                report.config_preserved,
+            );
             Ok(0)
         }
         Command::Install { codex_version } => {
@@ -443,6 +470,7 @@ fn parse_command(mut arguments: impl Iterator<Item = String>) -> Result<Command,
         Some("doctor") => parse_doctor(arguments).map(Command::Doctor),
         Some("receive") if arguments.next().is_none() => Ok(Command::Receive),
         Some("agent") if arguments.next().is_none() => Ok(Command::Agent),
+        Some("hook") => parse_hook(arguments).map(Command::Hook),
         Some("install") => parse_install(arguments),
         Some("uninstall") if arguments.next().is_none() => Ok(Command::Uninstall),
         Some("status") => parse_format_only(arguments).map(Command::Status),
@@ -451,7 +479,23 @@ fn parse_command(mut arguments: impl Iterator<Item = String>) -> Result<Command,
     }
 }
 
+fn parse_hook(mut arguments: impl Iterator<Item = String>) -> Result<HookCommand, CommandError> {
+    match arguments.next().as_deref() {
+        Some("install") => parse_optional_codex_version(arguments)
+            .map(|codex_version| HookCommand::Install { codex_version }),
+        Some("uninstall") if arguments.next().is_none() => Ok(HookCommand::Uninstall),
+        _ => Err(CommandError::Arguments),
+    }
+}
+
 fn parse_install(mut arguments: impl Iterator<Item = String>) -> Result<Command, CommandError> {
+    parse_optional_codex_version(&mut arguments)
+        .map(|codex_version| Command::Install { codex_version })
+}
+
+fn parse_optional_codex_version(
+    mut arguments: impl Iterator<Item = String>,
+) -> Result<Option<String>, CommandError> {
     let mut codex_version = None;
     while let Some(flag) = arguments.next() {
         let value = arguments.next().ok_or(CommandError::Arguments)?;
@@ -459,7 +503,7 @@ fn parse_install(mut arguments: impl Iterator<Item = String>) -> Result<Command,
             return Err(CommandError::Arguments);
         }
     }
-    Ok(Command::Install { codex_version })
+    Ok(codex_version)
 }
 
 fn parse_test(mut arguments: impl Iterator<Item = String>) -> Result<Command, CommandError> {
@@ -801,6 +845,42 @@ mod tests {
             &["test", "--wait-ms", "99"][..],
             &["test", "--wait-ms", "180001"][..],
             &["test", "--format", "json", "--format", "human"][..],
+        ] {
+            assert!(matches!(
+                parse_command(arguments(invalid)),
+                Err(CommandError::Arguments)
+            ));
+        }
+    }
+
+    #[test]
+    fn relay_hook_commands_freeze_installation_arguments() {
+        assert!(matches!(
+            parse_command(arguments(&["hook", "install"])),
+            Ok(Command::Hook(HookCommand::Install {
+                codex_version: None
+            }))
+        ));
+        assert!(matches!(
+            parse_command(arguments(&[
+                "hook",
+                "install",
+                "--codex-version",
+                "0.144.5"
+            ])),
+            Ok(Command::Hook(HookCommand::Install {
+                codex_version: Some(_)
+            }))
+        ));
+        assert!(matches!(
+            parse_command(arguments(&["hook", "uninstall"])),
+            Ok(Command::Hook(HookCommand::Uninstall))
+        ));
+        for invalid in [
+            &["hook"][..],
+            &["hook", "install", "extra"][..],
+            &["hook", "install", "--codex-version"][..],
+            &["hook", "uninstall", "extra"][..],
         ] {
             assert!(matches!(
                 parse_command(arguments(invalid)),

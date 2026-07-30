@@ -1,6 +1,6 @@
-//! Stage 14 desktop install, upgrade, status, and uninstall orchestration.
+//! Desktop installation and relay-hook lifecycle orchestration.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use codex_notifier_codex_source::{CapabilityAvailability, CodexCapabilityReport, CodexInterface};
@@ -13,12 +13,13 @@ use time::OffsetDateTime;
 use crate::database_path;
 use crate::desktop::{
     AgentStatus, DesktopError, current_config_paths, load_config_or_defaults,
-    load_config_or_defaults_read_only, notification_diagnostic, read_agent_status,
-    request_agent_shutdown,
+    load_config_or_defaults_read_only, load_current_config, notification_diagnostic,
+    read_agent_status, request_agent_shutdown,
 };
 use crate::lifecycle::{
-    InstallManifest, LifecycleError, ManagedRemovalReport, install_managed_documents,
-    read_manifest, stop_hook_group, uninstall_managed_documents,
+    InstallManifest, LifecycleError, LifecycleLayout, ManagedRemovalReport, PlatformOwnership,
+    RemovalDisposition, install_managed_documents, read_manifest, stop_hook_group,
+    uninstall_managed_documents,
 };
 use crate::platform::{
     PlatformError, begin_platform_install, current_platform_paths, platform_ownership,
@@ -56,6 +57,9 @@ pub enum InstallerError {
     /// Queue status could not be read.
     #[error("installed queue status is unavailable")]
     QueueStatus,
+    /// Relay hook management requires an explicit relay configuration.
+    #[error("Codex hook management requires the relay role")]
+    RelayRoleRequired,
 }
 
 impl InstallerError {
@@ -71,6 +75,7 @@ impl InstallerError {
             Self::Platform(error) => error.code(),
             Self::AgentStart => "install_agent_start_failed",
             Self::QueueStatus => "status_queue_unavailable",
+            Self::RelayRoleRequired => "install_relay_role_required",
         }
     }
 }
@@ -97,6 +102,26 @@ pub struct UninstallReport {
     pub managed: ManagedRemovalReport,
     /// Persistent event state is intentionally retained.
     pub state_preserved: bool,
+}
+
+/// Successful relay hook installation result.
+#[derive(Clone, Debug)]
+pub struct RelayHookInstallReport {
+    /// Whether an owned prior hook was upgraded or repaired.
+    pub upgraded: bool,
+    /// Fixed Codex hook trust action required from the user.
+    pub hook_trust: &'static str,
+    /// Fixed approval capability notice for the verified CLI interface.
+    pub approval_notice: &'static str,
+}
+
+/// Successful relay hook removal result.
+#[derive(Clone, Copy, Debug)]
+pub struct RelayHookUninstallReport {
+    /// Exact owned hook removal decision.
+    pub hook: RemovalDisposition,
+    /// Existing relay configuration is never removed by hook management.
+    pub config_preserved: bool,
 }
 
 /// Read-only installed state without payload or machine paths.
@@ -191,6 +216,7 @@ pub async fn install(codex_version: &str) -> Result<InstallReport, InstallerErro
         config.storage().state_dir(),
         config.agent().profile(),
         codex_version,
+        "desktop",
     )?;
     let hook_group = stop_hook_group(&command, windows_command.as_deref());
     let new_manifest = install_managed_documents(
@@ -259,6 +285,78 @@ pub async fn uninstall() -> Result<UninstallReport, InstallerError> {
     })
 }
 
+/// Installs or upgrades the verified task-completion hook for a relay agent.
+///
+/// Existing relay configuration and unrelated Codex hooks are preserved. The
+/// ownership manifest is separate from desktop installation state.
+///
+/// # Errors
+///
+/// Returns a stable capability, role, path, or structural document failure.
+pub fn install_relay_hook(codex_version: &str) -> Result<RelayHookInstallReport, InstallerError> {
+    let capability = CodexCapabilityReport::inspect(codex_version, CodexInterface::CliHook);
+    if capability.task_completed() != CapabilityAvailability::Supported {
+        return Err(InstallerError::UnsupportedCodex);
+    }
+    let (config_paths, config) = load_current_config()?;
+    if config.agent().role() != Role::Relay {
+        return Err(InstallerError::RelayRoleRequired);
+    }
+    let layout = relay_hook_layout(config_paths.config_file(), config.storage().state_dir())?;
+    let previous = read_manifest(&layout)?;
+    if previous
+        .as_ref()
+        .is_some_and(|manifest| manifest.platform() != &PlatformOwnership::Relay)
+    {
+        return Err(LifecycleError::OwnershipConflict.into());
+    }
+    let (command, windows_command) = hook_commands(
+        layout.installed_executable(),
+        config.storage().state_dir(),
+        config.agent().profile(),
+        codex_version,
+        "remote",
+    )?;
+    install_managed_documents(
+        &layout,
+        env!("CARGO_PKG_VERSION"),
+        stop_hook_group(&command, windows_command.as_deref()),
+        PlatformOwnership::Relay,
+    )?;
+    Ok(RelayHookInstallReport {
+        upgraded: previous.is_some(),
+        hook_trust: "review_required",
+        approval_notice: capability.approval_installation_notice(),
+    })
+}
+
+/// Removes only the exact relay-owned task-completion hook.
+///
+/// # Errors
+///
+/// Returns a stable role, ownership, path, or structural document failure.
+pub fn uninstall_relay_hook() -> Result<RelayHookUninstallReport, InstallerError> {
+    let (config_paths, config) = load_current_config()?;
+    if config.agent().role() != Role::Relay {
+        return Err(InstallerError::RelayRoleRequired);
+    }
+    let layout = relay_hook_layout(config_paths.config_file(), config.storage().state_dir())?;
+    let Some(manifest) = read_manifest(&layout)? else {
+        return Ok(RelayHookUninstallReport {
+            hook: RemovalDisposition::Absent,
+            config_preserved: true,
+        });
+    };
+    if manifest.platform() != &PlatformOwnership::Relay {
+        return Err(LifecycleError::OwnershipConflict.into());
+    }
+    let managed = uninstall_managed_documents(&layout, &manifest)?;
+    Ok(RelayHookUninstallReport {
+        hook: managed.hook,
+        config_preserved: managed.config != RemovalDisposition::Removed,
+    })
+}
+
 /// Reads install, startup, agent, queue, and notification status.
 ///
 /// # Errors
@@ -267,14 +365,20 @@ pub async fn uninstall() -> Result<UninstallReport, InstallerError> {
 pub fn status() -> Result<StatusReport, InstallerError> {
     let config_paths = current_config_paths()?;
     let config = load_config_or_defaults_read_only(&config_paths)?;
-    let (manifest, startup_registered) = if config.agent().role() == Role::Desktop {
-        let platform_paths = current_platform_paths(&config_paths, config.storage().state_dir())?;
-        (
-            read_manifest(platform_paths.lifecycle())?,
-            startup_resource_exists(&platform_paths),
-        )
-    } else {
-        (None, false)
+    let (manifest, startup_registered) = match config.agent().role() {
+        Role::Desktop => {
+            let platform_paths =
+                current_platform_paths(&config_paths, config.storage().state_dir())?;
+            (
+                read_manifest(platform_paths.lifecycle())?,
+                startup_resource_exists(&platform_paths),
+            )
+        }
+        Role::Relay => {
+            let layout =
+                relay_hook_layout(config_paths.config_file(), config.storage().state_dir())?;
+            (read_manifest(&layout)?, false)
+        }
     };
     let queue = queue_status(config.storage().state_dir());
     let (notification, notification_error) = if config.agent().role() == Role::Desktop {
@@ -348,6 +452,7 @@ fn hook_commands(
     state_dir: &Path,
     profile: &str,
     codex_version: &str,
+    host_label: &str,
 ) -> Result<(String, Option<String>), InstallerError> {
     let executable = executable
         .to_str()
@@ -366,7 +471,7 @@ fn hook_commands(
         "--ipc-profile",
         profile,
         "--host-label",
-        "desktop",
+        host_label,
     ];
     #[cfg(windows)]
     {
@@ -386,6 +491,33 @@ fn hook_commands(
             .join(" ");
         Ok((command, None))
     }
+}
+
+fn relay_hook_layout(
+    config_file: &Path,
+    state_dir: &Path,
+) -> Result<LifecycleLayout, InstallerError> {
+    let executable = std::env::current_exe().map_err(|_| InstallerError::UnsafeHookCommand)?;
+    let install_root = executable
+        .parent()
+        .map(Path::to_owned)
+        .ok_or(InstallerError::UnsafeHookCommand)?;
+    #[cfg(windows)]
+    let home = std::env::var_os("USERPROFILE");
+    #[cfg(not(windows))]
+    let home = std::env::var_os("HOME");
+    let home = home
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .ok_or(LifecycleError::InvalidLayout)?;
+    LifecycleLayout::new(
+        install_root,
+        executable,
+        config_file,
+        home.join(".codex").join("hooks.json"),
+        state_dir.join("relay-hook-manifest.json"),
+    )
+    .map_err(InstallerError::from)
 }
 
 #[cfg(windows)]
@@ -502,6 +634,7 @@ mod tests {
             Path::new("/Users/test/Library/Application Support/codex-notifier/state"),
             "default",
             "0.144.5",
+            "desktop",
         )
         .expect("safe command");
         assert!(command.contains("emit"));

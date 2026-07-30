@@ -1,0 +1,15 @@
+config_version = 1
+
+[agent]
+role = "relay"
+profile = "default"
+
+[relay]
+ssh_host_alias = "codex-notifier-desktop"
+connect_timeout_ms = 10000
+retry_initial_delay_ms = 1000
+retry_max_delay_ms = 60000
+retry_max_attempts = 20
+
+[storage]
+max_queue_entries = 1000

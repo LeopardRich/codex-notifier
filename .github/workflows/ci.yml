@@ -454,11 +454,25 @@ jobs:
           export XDG_CONFIG_HOME="$root/config"
           export XDG_STATE_HOME="$root/state"
           mkdir -p "$HOME"
-          "$package/install.sh" --no-enable
+          if "$package/install.sh" --no-enable --codex-version 0.144.5; then
+            echo "relay install unexpectedly accepted a missing configuration" >&2
+            exit 1
+          fi
+          test ! -e "$root/prefix/bin/codex-notifier"
+          test ! -e "$root/config/systemd/user/codex-notifier.service"
+          mkdir -p "$XDG_CONFIG_HOME/codex-notifier"
+          cp "$package/examples/config.toml.example" \
+            "$XDG_CONFIG_HOME/codex-notifier/config.toml"
+          "$package/install.sh" --no-enable --codex-version 0.144.5
           "$root/prefix/bin/codex-notifier" --version | grep -Fx "codex-notifier $version"
           "$root/prefix/bin/codex-notifier" doctor codex --codex-version 0.144.5 --interface cli-hook >/dev/null
+          jq -e '.hooks.Stop | length == 1' "$HOME/.codex/hooks.json" >/dev/null
+          test -f "$root/state/codex-notifier/relay-hook-manifest.json"
           "$package/uninstall.sh" --no-disable
           test ! -e "$root/prefix/bin/codex-notifier"
+          test ! -e "$HOME/.codex/hooks.json"
+          test ! -e "$root/state/codex-notifier/relay-hook-manifest.json"
+          test -f "$root/config/codex-notifier/config.toml"
           test -f "$root/state/codex-notifier/preserve-me"
 
       - name: Upload Linux archive

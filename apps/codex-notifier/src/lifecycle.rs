@@ -150,6 +150,8 @@ pub enum PlatformOwnership {
         /// Fixed launchd label.
         launch_agent_label: String,
     },
+    /// Relay-only installation owns no native platform resources.
+    Relay,
 }
 
 /// Installer-owned state needed for exact uninstall and upgrade.

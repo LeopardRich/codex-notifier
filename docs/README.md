@@ -13,6 +13,10 @@ behavior remains documented in both root README files.
   setup, security checks, and revocation.
 - [`relay-ssh.md`](relay-ssh.md): source-built relay configuration, delivery,
   retry recovery, and removal.
+- [`personal-deployment.md`](personal-deployment.md): verified engineering
+  builds on personally administered Windows, macOS, and Ubuntu devices.
+- [`personal-deployment-zh.md`](personal-deployment-zh.md): Chinese personal
+  deployment procedure.
 - [`diagnostics.md`](diagnostics.md): read-only health/status contracts,
   delivery-aware local/remote self-tests, and stable exit codes.
 - [`reliability.md`](reliability.md): Stage 18 crash, duplicate, fault, load,

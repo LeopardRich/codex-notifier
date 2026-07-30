@@ -16,7 +16,7 @@ sbom=$7
 [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]] || { echo "invalid version" >&2; exit 2; }
 [[ $commit =~ ^[0-9a-f]{40}$ ]] || { echo "invalid commit" >&2; exit 2; }
 [[ $target == x86_64-unknown-linux-gnu || $target == aarch64-unknown-linux-gnu ]] || { echo "invalid target" >&2; exit 2; }
-for path in "$binary" "$notices" "$sbom" LICENSE packaging/linux-relay/codex-notifier.service.in packaging/linux-relay/install.sh packaging/linux-relay/uninstall.sh packaging/ssh/config.relay.example; do
+for path in "$binary" "$notices" "$sbom" LICENSE packaging/linux-relay/codex-notifier.service.in packaging/linux-relay/install.sh packaging/linux-relay/uninstall.sh packaging/linux-relay/config.toml.example packaging/ssh/config.relay.example packaging/ssh/authorized_keys-windows.example packaging/ssh/authorized_keys-macos.example; do
     [[ -f $path ]] || { echo "missing release input" >&2; exit 2; }
 done
 
@@ -31,7 +31,10 @@ install -m 0755 "$binary" "$root/codex-notifier"
 install -m 0755 packaging/linux-relay/install.sh "$root/install.sh"
 install -m 0755 packaging/linux-relay/uninstall.sh "$root/uninstall.sh"
 install -m 0644 packaging/linux-relay/codex-notifier.service.in "$root/systemd/codex-notifier.service.in"
+install -m 0644 packaging/linux-relay/config.toml.example "$root/examples/config.toml.example"
 install -m 0644 packaging/ssh/config.relay.example "$root/examples/ssh-config.example"
+install -m 0644 packaging/ssh/authorized_keys-windows.example "$root/examples/authorized_keys-windows.example"
+install -m 0644 packaging/ssh/authorized_keys-macos.example "$root/examples/authorized_keys-macos.example"
 install -m 0644 LICENSE "$root/LICENSE"
 install -m 0644 "$notices" "$root/THIRD-PARTY-LICENSES.html"
 install -m 0644 "$sbom" "$root/codex-notifier.spdx.json"

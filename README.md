@@ -505,6 +505,7 @@ diagnostics are implemented:
 | `agent` | Implemented for desktop and relay | Run the configured per-user role process. |
 | `receive` | Implemented | Accept exactly one bounded canonical event from a restricted SSH session and forward it over local IPC. |
 | `install` / `uninstall` | Implemented for desktop | Reversibly manage the verified Codex hook and per-user Windows/macOS startup artifacts. |
+| `hook install` / `hook uninstall` | Implemented for relay | Reversibly merge or remove the verified task-completion hook without changing relay configuration or unrelated hooks. |
 | `doctor` | Implemented for desktop and relay | Read-only configuration, Codex, agent, IPC, storage, notification, OpenSSH, and target checks. |
 | `test` | Implemented for desktop and relay | Submit either explicit synthetic event and wait for its local or remote desktop delivery receipt. |
 | `status` | Implemented for desktop and relay | Show role, installation, agent, queue age/counts, delivery time, storage, and native status without event content. |
@@ -516,6 +517,13 @@ engineering artifacts and must not be installed as trusted release candidates.
 The eventual candidate must first pass checksums, the matching platform
 verifier, production desktop trust, and every item in
 [`docs/release-checklist.md`](docs/release-checklist.md).
+
+For use only on devices you own and administer, the latest green `main`
+verification bundle can be used as an explicitly untrusted personal build
+after checking `SHA256SUMS`. Windows may show an unsigned-app warning and macOS
+will not accept the ad-hoc app as notarized software. The exact personal setup,
+verification, SSH pairing, test, and removal procedure is in
+[`docs/personal-deployment.md`](docs/personal-deployment.md).
 
 After those gates report go, extract the matching verified archive and use its
 own executable or scripts:
@@ -605,8 +613,11 @@ user's SSH configuration or key files automatically.
 
 ### Relay SSH delivery
 
-Stage 16 adds the source-built relay agent path. A relay configuration uses a
-fixed system OpenSSH host alias and bounded delivery policy:
+Stage 16 adds the source-built relay agent path. The Linux package uses
+`hook install` to add the verified task-completion hook after a valid relay
+configuration exists; `hook uninstall` removes only that owned group. A relay
+configuration uses a fixed system OpenSSH host alias and bounded delivery
+policy:
 
 ```toml
 config_version = 1

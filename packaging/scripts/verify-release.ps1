@@ -78,7 +78,7 @@ try {
         if ($topLevel.Count -ne 1 -or $topLevel[0].Name -ne [IO.Path]::GetFileName($root)) { throw 'Linux archive has an unexpected top-level layout' }
         $metadataPath = Join-Path $root 'RELEASE-METADATA.json'
         $executable = Join-Path $root 'codex-notifier'
-        $required = @($executable, (Join-Path $root 'install.sh'), (Join-Path $root 'uninstall.sh'), (Join-Path $root 'systemd/codex-notifier.service.in'), (Join-Path $root 'examples/ssh-config.example'), (Join-Path $root 'LICENSE'), (Join-Path $root 'THIRD-PARTY-LICENSES.html'), (Join-Path $root 'codex-notifier.spdx.json'), $metadataPath)
+        $required = @($executable, (Join-Path $root 'install.sh'), (Join-Path $root 'uninstall.sh'), (Join-Path $root 'systemd/codex-notifier.service.in'), (Join-Path $root 'examples/config.toml.example'), (Join-Path $root 'examples/ssh-config.example'), (Join-Path $root 'examples/authorized_keys-windows.example'), (Join-Path $root 'examples/authorized_keys-macos.example'), (Join-Path $root 'LICENSE'), (Join-Path $root 'THIRD-PARTY-LICENSES.html'), (Join-Path $root 'codex-notifier.spdx.json'), $metadataPath)
     }
 
     foreach ($path in $required) {
